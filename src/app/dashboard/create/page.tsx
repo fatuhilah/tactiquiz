@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -11,6 +11,8 @@ import {
   CheckCircle2,
   Sparkles,
   Layers,
+  Download,
+  UploadCloud,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import ChessQuizBoard, {
@@ -42,6 +44,8 @@ const PIECE_OPTIONS: PieceType[] = [
 
 export default function CreateQuizPage() {
   const router = useRouter();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [saving, setSaving] = useState(false);
@@ -103,6 +107,123 @@ export default function CreateQuizPage() {
     });
   };
 
+  // ==================== FITUR CSV ====================
+  const handleDownloadTemplate = () => {
+    const csvContent =
+      `Pertanyaan,Opsi A,Opsi B,Opsi C,Opsi D,Kunci Jawaban (A/B/C/D),Bidak (KNIGHT/BISHOP/ROOK/QUEEN/KING/PAWN),Rintangan (0/2/3/4/5)\n` +
+      `"Siapakah penemu bola lampu pijar?","Nikola Tesla","Thomas Alva Edison","Albert Einstein","Isaac Newton",B,QUEEN,4\n` +
+      `"Berapa hasil dari 12 x 8?",84,92,96,108,C,KNIGHT,3`;
+
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", "Template_Soal_TactiQuiz.csv");
+    link.style.visibility = "hidden";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Parser CSV pintar (menghandle teks berkoma di dalam tanda kutip)
+  const parseCSV = (str: string) => {
+    const result: string[][] = [];
+    let row: string[] = [];
+    let current = "";
+    let inQuotes = false;
+    str = str.replace(/\r/g, ""); // Hapus carriage return
+
+    for (let i = 0; i < str.length; i++) {
+      const char = str[i];
+      if (char === '"') {
+        if (inQuotes && str[i + 1] === '"') {
+          current += '"';
+          i++; // Skip escape quote
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === "," && !inQuotes) {
+        row.push(current.trim());
+        current = "";
+      } else if (char === "\n" && !inQuotes) {
+        row.push(current.trim());
+        if (row.some((c) => c)) result.push(row);
+        row = [];
+        current = "";
+      } else {
+        current += char;
+      }
+    }
+    if (current || row.length > 0) {
+      row.push(current.trim());
+      if (row.some((c) => c)) result.push(row);
+    }
+    return result;
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      const rows = parseCSV(text);
+      if (rows.length <= 1) {
+        alert("File CSV kosong atau format tidak sesuai!");
+        return;
+      }
+
+      const importedQuestions: DraftQuestion[] = [];
+      // Mulai dari baris ke-2 (index 1) karena baris 1 adalah Header
+      for (let i = 1; i < rows.length; i++) {
+        const cols = rows[i];
+        if (cols.length < 6) continue;
+
+        const qText = cols[0] || "";
+        const opA = cols[1] || "";
+        const opB = cols[2] || "";
+        const opC = cols[3] || "";
+        const opD = cols[4] || "";
+
+        let correct = cols[5]?.toUpperCase();
+        if (!["A", "B", "C", "D"].includes(correct)) correct = "A";
+
+        let piece = cols[6]?.toUpperCase() as PieceType;
+        if (!PIECE_OPTIONS.includes(piece)) piece = "KNIGHT";
+
+        const rawObs = parseInt(cols[7]);
+        const obstacles = isNaN(rawObs) ? 3 : rawObs;
+
+        if (qText && opA && opB && opC && opD) {
+          importedQuestions.push({
+            tempId: `import-${Date.now()}-${i}`,
+            question_text: qText,
+            options: { A: opA, B: opB, C: opC, D: opD },
+            correct_option: correct as OptionKey,
+            piece_type: piece,
+            obstacles: obstacles,
+          });
+        }
+      }
+
+      if (importedQuestions.length > 0) {
+        setQuestions(importedQuestions);
+        setActiveIndex(0);
+        alert(`Sukses! ${importedQuestions.length} soal berhasil diimpor.`);
+      } else {
+        alert(
+          "Gagal membaca soal. Pastikan format CSV sesuai dengan Template.",
+        );
+      }
+
+      // Reset input file agar bisa upload file yang sama lagi jika perlu
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    };
+    reader.readAsText(file);
+  };
+  // ===================================================
+
   const handleSaveQuiz = async () => {
     if (!title.trim()) {
       alert("Judul kuis wajib diisi ya!");
@@ -127,7 +248,6 @@ export default function CreateQuizPage() {
 
     setSaving(true);
     try {
-      // 1. Simpan ke tabel quizzes
       const { data: quizData, error: quizError } = await supabase
         .from("quizzes")
         .insert([
@@ -142,7 +262,6 @@ export default function CreateQuizPage() {
 
       if (quizError) throw quizError;
 
-      // 2. Simpan semua pertanyaan ke tabel questions
       const rowsToInsert = questions.map((q, idx) => ({
         quiz_id: quizData.id,
         question_text: q.question_text.trim(),
@@ -171,7 +290,6 @@ export default function CreateQuizPage() {
     }
   };
 
-  // Data untuk komponen Preview Papan Catur
   const previewData: QuestionData = {
     id: activeQuestion.tempId,
     question_text: activeQuestion.question_text || "Contoh Pertanyaan",
@@ -244,33 +362,62 @@ export default function CreateQuizPage() {
           </div>
         </div>
 
-        {/* Navigasi Tab Nomor Soal */}
-        <div className="flex items-center gap-2 overflow-x-auto pb-3 mb-4">
-          {questions.map((q, idx) => (
+        {/* Toolbar CSV & Nomor Soal */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+          <div className="flex items-center gap-2 overflow-x-auto pb-2 sm:pb-0 hide-scrollbar">
+            {questions.map((q, idx) => (
+              <button
+                key={q.tempId}
+                type="button"
+                onClick={() => setActiveIndex(idx)}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl font-black text-sm border-2 border-b-4 shrink-0 transition cursor-pointer ${
+                  idx === activeIndex
+                    ? "bg-[#2B90FF] text-white border-[#1D7AFC] border-b-[#1359B8]"
+                    : "bg-white text-slate-600 border-slate-200 hover:bg-sky-50"
+                }`}
+              >
+                <span>Soal {idx + 1}</span>
+                <span className="text-base">
+                  {PIECE_META[q.piece_type].symbol}
+                </span>
+              </button>
+            ))}
             <button
-              key={q.tempId}
               type="button"
-              onClick={() => setActiveIndex(idx)}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl font-black text-sm border-2 border-b-4 shrink-0 transition cursor-pointer ${
-                idx === activeIndex
-                  ? "bg-[#2B90FF] text-white border-[#1D7AFC] border-b-[#1359B8]"
-                  : "bg-white text-slate-600 border-slate-200 hover:bg-sky-50"
-              }`}
+              onClick={addQuestion}
+              className="flex items-center gap-1.5 px-4 py-2.5 rounded-2xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-2 border-dashed border-emerald-300 font-extrabold text-sm shrink-0 transition cursor-pointer"
             >
-              <span>Soal {idx + 1}</span>
-              <span className="text-base">
-                {PIECE_META[q.piece_type].symbol}
-              </span>
+              <Plus className="w-4 h-4" /> Tambah Soal
             </button>
-          ))}
+          </div>
 
-          <button
-            type="button"
-            onClick={addQuestion}
-            className="flex items-center gap-1.5 px-4 py-2.5 rounded-2xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-2 border-dashed border-emerald-300 font-extrabold text-sm shrink-0 transition cursor-pointer"
-          >
-            <Plus className="w-4 h-4" /> Tambah Soal
-          </button>
+          {/* Action Tombol CSV */}
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={handleDownloadTemplate}
+              className="flex items-center gap-1.5 px-3.5 py-2.5 rounded-2xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-2 border-indigo-200 font-extrabold text-xs sm:text-sm transition cursor-pointer"
+            >
+              <Download className="w-4 h-4" />
+              <span className="hidden sm:inline">Template CSV</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center gap-1.5 px-4 py-2.5 rounded-2xl bg-slate-800 hover:bg-slate-900 text-white font-extrabold text-xs sm:text-sm border-b-4 border-slate-950 transition cursor-pointer"
+            >
+              <UploadCloud className="w-4 h-4" />
+              <span>Upload CSV</span>
+            </button>
+            <input
+              type="file"
+              ref={fileInputRef}
+              hidden
+              accept=".csv"
+              onChange={handleFileUpload}
+            />
+          </div>
         </div>
 
         {/* Editor 2 Kolom */}
