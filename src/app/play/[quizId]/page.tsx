@@ -217,8 +217,22 @@ export default function PlayQuizPage() {
     }
   }, [currentIndex, questions.length]);
 
+  // 1. Jalankan timer mundur selama soal aktif
+  useEffect(() => {
+    if (loading || !currentQuestion || feedback || isFinished || timeLeft <= 0)
+      return;
+
+    const timer = setInterval(() => {
+      setTimeLeft((prev) => Math.max(0, Number((prev - 0.1).toFixed(1))));
+    }, 100);
+
+    return () => clearInterval(timer);
+  }, [loading, currentQuestion, feedback, isFinished, timeLeft]);
+
+  // 2. Tangani saat waktu habis (0 detik)
   useEffect(() => {
     if (loading || !currentQuestion || feedback || isFinished) return;
+
     if (timeLeft <= 0) {
       sound.playWrong();
       setStreak(0);
@@ -232,24 +246,18 @@ export default function PlayQuizPage() {
           movesUsed: 0,
         },
       ]);
-      const t = setTimeout(goToNextQuestion, 1800);
-      return () => clearTimeout(t);
     }
+  }, [timeLeft, loading, currentQuestion, feedback, isFinished]);
 
-    const timer = setInterval(() => {
-      setTimeLeft((prev) => Math.max(0, prev - 0.1));
-    }, 100);
+  // 3. Otomatis lanjut ke soal berikutnya 1.8 detik setelah feedback muncul
+  useEffect(() => {
+    if (!feedback || isFinished) return;
 
-    return () => clearInterval(timer);
-  }, [
-    timeLeft,
-    feedback,
-    isFinished,
-    loading,
-    currentQuestion,
-    goToNextQuestion,
-  ]);
+    const t = setTimeout(goToNextQuestion, 1800);
+    return () => clearTimeout(t);
+  }, [feedback, isFinished, goToNextQuestion]);
 
+  // ⬇️ Tambahkan kembali blok ini
   if (loading) {
     return (
       <main className="min-h-screen bg-[#F2F7FC] flex items-center justify-center font-black text-slate-500">
@@ -310,8 +318,6 @@ export default function PlayQuizPage() {
       setStreak(0);
       setFeedback("WRONG");
     }
-
-    setTimeout(goToNextQuestion, 1800);
   };
 
   const activateFiftyFifty = () => {
