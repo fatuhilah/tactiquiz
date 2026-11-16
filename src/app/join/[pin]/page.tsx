@@ -17,6 +17,8 @@ import {
   Home,
   ArrowRight,
   BookOpen,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 import ChessQuizBoard, {
   QuestionData,
@@ -33,7 +35,6 @@ interface RoomData {
   pin_code: string;
   quiz_id: string;
   status: "waiting" | "playing" | "finished";
-  current_question_index: number;
 }
 
 interface PlayerRow {
@@ -69,19 +70,24 @@ export default function PlayerJoinAndPlayPage() {
   const [room, setRoom] = useState<RoomData | null>(null);
   const [questions, setQuestions] = useState<QuestionData[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isMuted, setIsMuted] = useState(false);
 
   const [player, setPlayer] = useState<PlayerRow | null>(null);
   const [nickname, setNickname] = useState("");
   const [selectedAvatar, setSelectedAvatar] = useState<PieceType>("KNIGHT");
   const [joining, setJoining] = useState(false);
 
-  const [activeQIndex, setActiveQIndex] = useState<number>(0);
+  // Menggunakan Index Lokal agar siswa bisa jalan sendiri
+  const [localQIndex, setLocalQIndex] = useState<number>(0);
   const [timeLeft, setTimeLeft] = useState(QUESTION_TIME);
   const [feedback, setFeedback] = useState<
     "CORRECT" | "WRONG" | "TIMEOUT" | null
   >(null);
   const [lastPoints, setLastPoints] = useState<number | null>(null);
   const [hasAnsweredCurrent, setHasAnsweredCurrent] = useState(false);
+
+  // Status selesai khusus siswa ini
+  const [isSelfFinished, setIsSelfFinished] = useState(false);
   const [leaderboard, setLeaderboard] = useState<PlayerRow[]>([]);
   const [answerHistory, setAnswerHistory] = useState<AnswerRecord[]>([]);
 
@@ -90,10 +96,43 @@ export default function PlayerJoinAndPlayPage() {
   const [usedFiftyFifty, setUsedFiftyFifty] = useState(false);
   const [usedQueenBoost, setUsedQueenBoost] = useState(false);
 
+  // Kontrol musik kalem saat sesi live playing berlangsung
+  useEffect(() => {
+    setIsMuted(sound.getMuted());
+
+    if (player && room?.status === "playing" && !isSelfFinished) {
+      sound.startMusic();
+    } else {
+      sound.stopMusic();
+    }
+
+    const unlockAudio = () => {
+      if (
+        !sound.getMuted() &&
+        player &&
+        room?.status === "playing" &&
+        !isSelfFinished
+      ) {
+        sound.startMusic();
+      }
+    };
+    window.addEventListener("pointerdown", unlockAudio, { once: true });
+
+    return () => {
+      window.removeEventListener("pointerdown", unlockAudio);
+      sound.stopMusic();
+    };
+  }, [player, room?.status, isSelfFinished]);
+
+  const handleToggleMusic = () => {
+    const nextMuted = sound.toggleMute();
+    setIsMuted(nextMuted);
+  };
+
   const syncRoomState = useCallback(async (roomId: string) => {
     const { data } = await supabase
       .from("rooms")
-      .select("*")
+      .select("id, pin_code, quiz_id, status")
       .eq("id", roomId)
       .single();
 
@@ -106,7 +145,7 @@ export default function PlayerJoinAndPlayPage() {
     async function initPlayerRoom() {
       const { data: roomData, error } = await supabase
         .from("rooms")
-        .select("*")
+        .select("id, pin_code, quiz_id, status")
         .eq("pin_code", pin)
         .single();
 
@@ -117,7 +156,6 @@ export default function PlayerJoinAndPlayPage() {
       }
 
       setRoom(roomData as RoomData);
-      setActiveQIndex(roomData.current_question_index);
 
       const { data: qRows } = await supabase
         .from("questions")
@@ -178,20 +216,7 @@ export default function PlayerJoinAndPlayPage() {
   }, [room?.id, syncRoomState]);
 
   useEffect(() => {
-    if (!room) return;
-    if (room.current_question_index !== activeQIndex) {
-      setActiveQIndex(room.current_question_index);
-      setTimeLeft(QUESTION_TIME);
-      setFeedback(null);
-      setLastPoints(null);
-      setHasAnsweredCurrent(false);
-      setEliminatedOptions([]);
-      setQueenOverride(false);
-    }
-  }, [room, activeQIndex]);
-
-  useEffect(() => {
-    if (room?.status === "finished" && room.id) {
+    if ((room?.status === "finished" || isSelfFinished) && room?.id) {
       supabase
         .from("players")
         .select("*")
@@ -201,11 +226,33 @@ export default function PlayerJoinAndPlayPage() {
           if (data) setLeaderboard(data as PlayerRow[]);
         });
     }
-  }, [room?.status, room?.id]);
+  }, [room?.status, room?.id, isSelfFinished]);
 
+  const goToNextQuestion = useCallback(() => {
+    setFeedback(null);
+    setLastPoints(null);
+    setEliminatedOptions([]);
+    setQueenOverride(false);
+    setHasAnsweredCurrent(false);
+
+    if (localQIndex + 1 >= questions.length) {
+      setIsSelfFinished(true);
+    } else {
+      setLocalQIndex((prev) => prev + 1);
+      setTimeLeft(QUESTION_TIME);
+    }
+  }, [localQIndex, questions.length]);
+
+  // Timer mandiri siswa
   useEffect(() => {
-    if (!player || room?.status !== "playing" || hasAnsweredCurrent) return;
-    const currentQ = questions[room.current_question_index];
+    if (
+      !player ||
+      room?.status !== "playing" ||
+      hasAnsweredCurrent ||
+      isSelfFinished
+    )
+      return;
+    const currentQ = questions[localQIndex];
 
     if (timeLeft <= 0) {
       sound.playWrong();
@@ -217,12 +264,14 @@ export default function PlayerJoinAndPlayPage() {
           { question: currentQ, selectedOption: null, isCorrect: false },
         ]);
       }
+
       supabase
         .from("players")
         .update({ streak: 0 })
         .eq("id", player.id)
         .then(() => {
           setPlayer((prev) => (prev ? { ...prev, streak: 0 } : null));
+          setTimeout(goToNextQuestion, 1800);
         });
       return;
     }
@@ -235,10 +284,12 @@ export default function PlayerJoinAndPlayPage() {
   }, [
     player,
     room?.status,
-    room?.current_question_index,
+    localQIndex,
     hasAnsweredCurrent,
     timeLeft,
     questions,
+    isSelfFinished,
+    goToNextQuestion,
   ]);
 
   const handleJoinSubmit = async (e: React.FormEvent) => {
@@ -276,10 +327,10 @@ export default function PlayerJoinAndPlayPage() {
     isCorrect: boolean,
     movesUsed: number,
   ) => {
-    if (!player || hasAnsweredCurrent || !room) return;
+    if (!player || hasAnsweredCurrent || !room || isSelfFinished) return;
     setHasAnsweredCurrent(true);
 
-    const currentQ = questions[room.current_question_index];
+    const currentQ = questions[localQIndex];
     if (currentQ) {
       setAnswerHistory((prev) => [
         ...prev,
@@ -311,6 +362,8 @@ export default function PlayerJoinAndPlayPage() {
 
       await supabase.from("players").update({ streak: 0 }).eq("id", player.id);
     }
+
+    setTimeout(goToNextQuestion, 1800);
   };
 
   if (loading || !room) {
@@ -424,8 +477,8 @@ export default function PlayerJoinAndPlayPage() {
     );
   }
 
-  // ==================== HASIL AKHIR & REVIEW JAWABAN SISWA ====================
-  if (room.status === "finished") {
+  // Jika siswa sudah selesai sendiri ATAU guru mengakhiri permainan duluan
+  if (room.status === "finished" || isSelfFinished) {
     const myRank = leaderboard.findIndex((p) => p.id === player.id) + 1;
     return (
       <main className="min-h-screen bg-[#F2F7FC] text-slate-800 py-8 px-4 sm:px-6">
@@ -444,7 +497,9 @@ export default function PlayerJoinAndPlayPage() {
             <div className="my-6 grid grid-cols-2 gap-3 max-w-md mx-auto">
               <div className="p-4 rounded-2xl bg-amber-50 border-2 border-amber-200">
                 <p className="text-xs font-extrabold text-amber-700">
-                  Peringkatmu
+                  {room.status === "finished"
+                    ? "Peringkatmu"
+                    : "Peringkat Sementara"}
                 </p>
                 <p className="text-3xl font-black text-amber-600 mt-1">
                   {myRank > 0 ? `#${myRank}` : "-"}
@@ -461,6 +516,12 @@ export default function PlayerJoinAndPlayPage() {
               </div>
             </div>
 
+            {room.status !== "finished" && (
+              <p className="text-sm font-bold text-slate-500 mb-6 animate-pulse">
+                Menunggu guru mengakhiri permainan untuk melihat hasil kelas...
+              </p>
+            )}
+
             <Link
               href="/"
               className="inline-flex items-center justify-center gap-2 px-7 py-4 rounded-2xl bg-[#2B90FF] hover:bg-[#1D7AFC] text-white font-black text-base border-b-4 border-[#1359B8] transition"
@@ -469,7 +530,6 @@ export default function PlayerJoinAndPlayPage() {
             </Link>
           </div>
 
-          {/* Pembahasan Soal yang Sudah Dikerjakan */}
           {answerHistory.length > 0 && (
             <div className="bg-white border-2 border-slate-200/90 border-b-[6px] rounded-[32px] p-6 sm:p-7 shadow-md">
               <div className="flex items-center gap-2.5 mb-5">
@@ -574,8 +634,7 @@ export default function PlayerJoinAndPlayPage() {
     );
   }
 
-  const currentQuestion =
-    questions[room.current_question_index] || questions[0];
+  const currentQuestion = questions[localQIndex] || questions[0];
   const activePiece: PieceType = queenOverride
     ? "QUEEN"
     : currentQuestion?.piece_type || "KNIGHT";
@@ -603,17 +662,42 @@ export default function PlayerJoinAndPlayPage() {
   return (
     <main className="min-h-screen bg-[#F2F7FC] text-slate-800 pb-8">
       <header className="bg-white border-b-2 border-slate-200/80 sticky top-0 z-20">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
             <span className="font-black text-base sm:text-lg text-slate-800">
               {player.nickname}
             </span>
             <span className="text-xs font-extrabold px-2.5 py-1 rounded-xl bg-sky-100 text-sky-700">
-              Soal {room.current_question_index + 1}/{questions.length}
+              Soal {localQIndex + 1}/{questions.length}
             </span>
           </div>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+            <button
+              type="button"
+              onClick={handleToggleMusic}
+              title={
+                isMuted ? "Nyalakan Musik Belajar" : "Matikan Musik (Mute)"
+              }
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-2xl border-2 font-black text-xs transition cursor-pointer ${
+                isMuted
+                  ? "bg-slate-100 border-slate-200 text-slate-400 hover:text-slate-600"
+                  : "bg-emerald-50 border-emerald-200 text-emerald-600 hover:bg-emerald-100"
+              }`}
+            >
+              {isMuted ? (
+                <>
+                  <VolumeX className="w-4 h-4" />
+                  <span className="hidden sm:inline">Mute</span>
+                </>
+              ) : (
+                <>
+                  <Volume2 className="w-4 h-4" />
+                  <span className="hidden sm:inline">Musik</span>
+                </>
+              )}
+            </button>
+
             <div className="flex items-center gap-1 px-3 py-1.5 rounded-2xl bg-orange-50 border-2 border-orange-200 text-orange-600 font-black text-sm">
               <Flame className="w-4 h-4 fill-orange-500 text-orange-500" />
               <span>{player.streak}</span>
@@ -625,10 +709,10 @@ export default function PlayerJoinAndPlayPage() {
               <AnimatePresence>
                 {lastPoints && (
                   <motion.span
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 32 }}
+                    initial={{ opacity: 0, y: 10, scale: 0.8 }}
+                    animate={{ opacity: 1, y: 34, scale: 1.1 }}
                     exit={{ opacity: 0 }}
-                    className="absolute right-0 px-2 py-0.5 rounded-full bg-emerald-500 text-white text-xs font-black"
+                    className="absolute right-1 px-2 py-0.5 rounded-full bg-emerald-500 text-white text-xs font-black shadow-md pointer-events-none"
                   >
                     +{lastPoints}
                   </motion.span>
@@ -645,7 +729,7 @@ export default function PlayerJoinAndPlayPage() {
             <div className="rounded-[28px] bg-gradient-to-br from-[#4AA8FF] via-[#2B90FF] to-[#1A73E8] p-6 text-white shadow-lg border-b-[6px] border-[#1359B8]">
               <div className="flex items-center justify-between gap-2 mb-3">
                 <span className="text-xs font-extrabold bg-white/20 px-3 py-1 rounded-full">
-                  Soal #{room.current_question_index + 1}
+                  Soal #{localQIndex + 1}
                 </span>
                 <div className="flex items-center gap-2 bg-black/20 px-3 py-1 rounded-full">
                   <Clock className="w-3.5 h-3.5 text-amber-300" />
@@ -692,7 +776,7 @@ export default function PlayerJoinAndPlayPage() {
                   )}
                 </div>
                 <p className="text-xs font-bold opacity-75">
-                  ⏳ Menunggu guru melanjutkan ke soal berikutnya...
+                  ⏳ Melanjutkan ke soal berikutnya...
                 </p>
               </div>
             )}
@@ -768,7 +852,7 @@ export default function PlayerJoinAndPlayPage() {
 
           <div className="lg:col-span-5 bg-white p-4 sm:p-5 rounded-[28px] border-2 border-slate-200/90 border-b-[6px] shadow-md">
             <ChessQuizBoard
-              key={`live-q-${room.current_question_index}`}
+              key={`live-q-${localQIndex}`}
               question={currentQuestion}
               activePiece={activePiece}
               eliminatedOptions={eliminatedOptions}
