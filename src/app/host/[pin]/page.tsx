@@ -10,13 +10,14 @@ import {
   Trophy,
   Star,
   Flame,
-  ArrowRight,
   Copy,
   Check,
   Sparkles,
   Home,
   Flag,
   BookOpen,
+  CheckCircle2,
+  FileQuestion,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import {
@@ -32,7 +33,6 @@ interface RoomData {
   pin_code: string;
   quiz_id: string;
   status: "waiting" | "playing" | "finished";
-  current_question_index: number;
 }
 
 interface QuestionRow {
@@ -54,6 +54,8 @@ interface PlayerRow {
   piece_skin: PieceType;
   score: number;
   streak: number;
+  current_question_index?: number;
+  is_finished?: boolean;
   joined_at: string;
 }
 
@@ -85,7 +87,7 @@ export default function HostRoomPage() {
     async function initHost() {
       const { data: roomData, error } = await supabase
         .from("rooms")
-        .select("*")
+        .select("id, pin_code, quiz_id, status")
         .eq("pin_code", pin)
         .single();
 
@@ -153,7 +155,7 @@ export default function HostRoomPage() {
 
     const interval = setInterval(() => {
       fetchPlayers(room.id);
-    }, 3000);
+    }, 2000);
 
     return () => {
       supabase.removeChannel(channel);
@@ -178,53 +180,30 @@ export default function HostRoomPage() {
     sound.playPowerUp();
     const { data } = await supabase
       .from("rooms")
-      .update({ status: "playing", current_question_index: 0 })
+      .update({ status: "playing" })
       .eq("id", room.id)
-      .select()
+      .select("id, pin_code, quiz_id, status")
       .single();
 
     if (data) setRoom(data as RoomData);
     setUpdating(false);
   };
 
-  const handleNextQuestion = async () => {
+  const handleFinishSession = async (skipConfirm = false) => {
     if (!room) return;
-    setUpdating(true);
-    const nextIdx = room.current_question_index + 1;
-
-    if (nextIdx >= questions.length) {
-      sound.playCorrect();
-      const { data } = await supabase
-        .from("rooms")
-        .update({ status: "finished" })
-        .eq("id", room.id)
-        .select()
-        .single();
-      if (data) setRoom(data as RoomData);
-    } else {
-      sound.playMove();
-      const { data } = await supabase
-        .from("rooms")
-        .update({ current_question_index: nextIdx })
-        .eq("id", room.id)
-        .select()
-        .single();
-      if (data) setRoom(data as RoomData);
-    }
-    setUpdating(false);
-  };
-
-  const handleEndEarly = async () => {
-    if (!room) return;
-    if (!confirm("Akhiri permainan sekarang dan tampilkan podium pemenang?"))
+    if (
+      !skipConfirm &&
+      !confirm("Akhiri permainan sekarang dan tampilkan podium pemenang?")
+    ) {
       return;
+    }
     setUpdating(true);
     sound.playCorrect();
     const { data } = await supabase
       .from("rooms")
       .update({ status: "finished" })
       .eq("id", room.id)
-      .select()
+      .select("id, pin_code, quiz_id, status")
       .single();
     if (data) setRoom(data as RoomData);
     setUpdating(false);
@@ -240,7 +219,9 @@ export default function HostRoomPage() {
 
   const sortedPlayers = [...players].sort((a, b) => b.score - a.score);
   const topScore = Math.max(100, sortedPlayers[0]?.score || 100);
-  const currentQ = questions[room.current_question_index];
+  const finishedCount = players.filter((p) => p.is_finished).length;
+  const allStudentsFinished =
+    players.length > 0 && finishedCount === players.length;
 
   return (
     <main className="min-h-screen bg-[#F2F7FC] text-slate-800 pb-12">
@@ -255,7 +236,7 @@ export default function HostRoomPage() {
                 Tacti<span className="text-[#2589FF]">Quiz</span> Live
               </span>
               <span className="text-xs font-bold text-slate-400">
-                {quizTitle}
+                {quizTitle} • {questions.length} Soal
               </span>
             </div>
           </div>
@@ -269,10 +250,18 @@ export default function HostRoomPage() {
             {room.status === "playing" && (
               <button
                 type="button"
-                onClick={handleEndEarly}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-2xl bg-rose-50 hover:bg-rose-100 text-rose-600 border-2 border-rose-200 font-extrabold text-xs transition cursor-pointer"
+                onClick={() => handleFinishSession(allStudentsFinished)}
+                disabled={updating}
+                className={`inline-flex items-center gap-1.5 px-4 py-2.5 rounded-2xl font-black text-xs sm:text-sm border-b-4 transition cursor-pointer ${
+                  allStudentsFinished
+                    ? "bg-[#22C55E] hover:bg-[#1EB054] text-white border-[#15803D] shadow-md"
+                    : "bg-rose-50 hover:bg-rose-100 text-rose-600 border-rose-200"
+                }`}
               >
-                <Flag className="w-3.5 h-3.5" /> Akhiri
+                <Flag className="w-4 h-4" />
+                <span>
+                  {allStudentsFinished ? "Lihat Podium Juara" : "Akhiri Sesi"}
+                </span>
               </button>
             )}
           </div>
@@ -376,50 +365,53 @@ export default function HostRoomPage() {
           </div>
         )}
 
-        {/* ==================== STATE 2: LIVE GAMEPLAY & KLASEMEN ==================== */}
+        {/* ==================== STATE 2: LIVE MONITOR & KLASEMEN SISWA ==================== */}
         {room.status === "playing" && (
           <div className="flex flex-col gap-6">
-            <div className="bg-white p-6 rounded-[28px] border-2 border-slate-200/90 border-b-[6px] flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            {/* Ringkasan Status Kelas (Tanpa Tombol Next) */}
+            <div className="bg-white p-5 sm:p-6 rounded-[28px] border-2 border-slate-200/90 border-b-[6px] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
-                <div className="flex items-center gap-2 mb-1.5">
-                  <span className="px-3 py-1 rounded-full bg-sky-100 text-sky-700 font-black text-xs">
-                    Soal {room.current_question_index + 1} dari{" "}
-                    {questions.length}
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 text-emerald-700 font-black text-xs animate-pulse">
+                    ● Sesi Berlangsung Mandiri
                   </span>
-                  {currentQ && (
-                    <span className="px-3 py-1 rounded-full bg-amber-100 text-amber-800 font-extrabold text-xs">
-                      Bidak: {PIECE_META[currentQ.piece_type]?.name || "Kuda"}
-                    </span>
-                  )}
+                  <span className="px-3 py-1 rounded-full bg-sky-100 text-sky-700 font-black text-xs">
+                    Total {questions.length} Soal
+                  </span>
                 </div>
-                <h2 className="text-xl sm:text-2xl font-black text-slate-800">
-                  {currentQ?.question_text}
+                <h2 className="text-lg sm:text-xl font-black text-slate-800">
+                  Pantauan Langsung Progres Siswa
                 </h2>
+                <p className="text-xs font-bold text-slate-400">
+                  Siswa mengerjakan soal sesuai kecepatan masing-masing •{" "}
+                  <strong className="text-slate-600">
+                    {finishedCount}/{players.length}
+                  </strong>{" "}
+                  siswa telah selesai
+                </p>
               </div>
 
-              <button
-                type="button"
-                onClick={handleNextQuestion}
-                disabled={updating}
-                className="px-6 py-4 rounded-2xl bg-[#2B90FF] hover:bg-[#1D7AFC] active:translate-y-0.5 text-white font-black text-base flex items-center gap-2 border-b-4 border-[#1359B8] shrink-0 transition cursor-pointer"
-              >
-                <span>
-                  {room.current_question_index + 1 >= questions.length
-                    ? "Selesai & Lihat Podium"
-                    : "Soal Berikutnya"}
-                </span>
-                <ArrowRight className="w-5 h-5" />
-              </button>
+              {allStudentsFinished && (
+                <button
+                  type="button"
+                  onClick={() => handleFinishSession(true)}
+                  disabled={updating}
+                  className="px-6 py-3.5 rounded-2xl bg-[#22C55E] hover:bg-[#1EB054] text-white font-black text-sm border-b-4 border-[#15803D] shadow-md transition cursor-pointer shrink-0"
+                >
+                  🏆 Semua Selesai! Buka Podium
+                </button>
+              )}
             </div>
 
+            {/* Live Racing Leaderboard + Info Soal yang Sedang Dikerjakan */}
             <div className="bg-white p-6 rounded-[28px] border-2 border-slate-200/90 border-b-[6px]">
               <div className="flex items-center justify-between mb-5">
                 <h3 className="text-lg font-black text-slate-800 flex items-center gap-2">
                   <Trophy className="w-5 h-5 text-amber-500" />
-                  Klasemen Balapan Langsung
+                  Klasemen & Posisi Soal Siswa
                 </h3>
                 <span className="text-xs font-bold text-slate-400">
-                  Skor otomatis naik saat siswa menjawab benar
+                  Update otomatis setiap kali siswa menjawab
                 </span>
               </div>
 
@@ -431,6 +423,8 @@ export default function HostRoomPage() {
                     12,
                     Math.round((player.score / topScore) * 100),
                   );
+                  const qIdx = player.current_question_index ?? 0;
+                  const activeQuestionObj = questions[qIdx];
 
                   return (
                     <motion.div
@@ -441,8 +435,9 @@ export default function HostRoomPage() {
                         stiffness: 350,
                         damping: 28,
                       }}
-                      className="flex items-center gap-3.5 p-3 rounded-2xl bg-[#F8FBFF] border-2 border-slate-100"
+                      className="flex items-center gap-3.5 p-3.5 rounded-2xl bg-[#F8FBFF] border-2 border-slate-200/70"
                     >
+                      {/* Peringkat */}
                       <div
                         className={`w-9 h-9 rounded-xl font-black text-sm flex items-center justify-center shrink-0 ${
                           index === 0
@@ -457,17 +452,33 @@ export default function HostRoomPage() {
                         #{index + 1}
                       </div>
 
+                      {/* Avatar Bidak */}
                       <div
-                        className={`w-10 h-10 rounded-xl ${meta.badgeColor} text-white flex items-center justify-center text-2xl shrink-0`}
+                        className={`w-11 h-11 rounded-xl ${meta.badgeColor} text-white flex items-center justify-center text-2xl shrink-0 shadow-xs`}
                       >
                         {meta.symbol}
                       </div>
 
+                      {/* Nama, Posisi Nomor Soal, Teks Soal & Progress Bar */}
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="font-black text-sm text-slate-800 truncate">
-                            {player.nickname}
-                          </span>
+                        <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="font-black text-sm sm:text-base text-slate-800 truncate">
+                              {player.nickname}
+                            </span>
+
+                            {player.is_finished ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 text-[11px] font-black shrink-0">
+                                <CheckCircle2 className="w-3 h-3" /> Selesai
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-sky-100 text-sky-700 text-[11px] font-black shrink-0">
+                                <FileQuestion className="w-3 h-3" /> Soal{" "}
+                                {qIdx + 1}/{questions.length}
+                              </span>
+                            )}
+                          </div>
+
                           <div className="flex items-center gap-2 shrink-0">
                             {player.streak >= 2 && (
                               <span className="inline-flex items-center gap-0.5 text-xs font-black text-orange-500">
@@ -482,7 +493,16 @@ export default function HostRoomPage() {
                           </div>
                         </div>
 
-                        <div className="w-full h-3 bg-slate-200/70 rounded-full overflow-hidden">
+                        {/* Teks Soal yang Sedang Dikerjakan Siswa */}
+                        <p className="text-xs font-semibold text-slate-500 truncate mb-2">
+                          {player.is_finished
+                            ? "🎉 Semua pertanyaan telah selesai dikerjakan."
+                            : activeQuestionObj
+                              ? `Sedang mengerjakan: "${activeQuestionObj.question_text}"`
+                              : "Memuat soal..."}
+                        </p>
+
+                        <div className="w-full h-2.5 bg-slate-200/70 rounded-full overflow-hidden">
                           <motion.div
                             animate={{ width: `${barWidth}%` }}
                             className="h-full bg-gradient-to-r from-[#3B9EFF] to-[#22C55E] rounded-full"
@@ -560,7 +580,6 @@ export default function HostRoomPage() {
               </Link>
             </div>
 
-            {/* Pembahasan Kunci Jawaban untuk Proyektor Kelas */}
             <div className="bg-white border-2 border-slate-200/90 border-b-[6px] rounded-[32px] p-6 sm:p-8 shadow-md">
               <div className="flex items-center gap-3 mb-6">
                 <div className="w-11 h-11 rounded-2xl bg-sky-100 text-[#2589FF] flex items-center justify-center">

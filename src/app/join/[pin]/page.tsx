@@ -44,6 +44,8 @@ interface PlayerRow {
   piece_skin: PieceType;
   score: number;
   streak: number;
+  current_question_index?: number;
+  is_finished?: boolean;
 }
 
 interface AnswerRecord {
@@ -77,7 +79,6 @@ export default function PlayerJoinAndPlayPage() {
   const [selectedAvatar, setSelectedAvatar] = useState<PieceType>("KNIGHT");
   const [joining, setJoining] = useState(false);
 
-  // Menggunakan Index Lokal agar siswa bisa jalan sendiri
   const [localQIndex, setLocalQIndex] = useState<number>(0);
   const [timeLeft, setTimeLeft] = useState(QUESTION_TIME);
   const [feedback, setFeedback] = useState<
@@ -86,7 +87,6 @@ export default function PlayerJoinAndPlayPage() {
   const [lastPoints, setLastPoints] = useState<number | null>(null);
   const [hasAnsweredCurrent, setHasAnsweredCurrent] = useState(false);
 
-  // Status selesai khusus siswa ini
   const [isSelfFinished, setIsSelfFinished] = useState(false);
   const [leaderboard, setLeaderboard] = useState<PlayerRow[]>([]);
   const [answerHistory, setAnswerHistory] = useState<AnswerRecord[]>([]);
@@ -96,7 +96,7 @@ export default function PlayerJoinAndPlayPage() {
   const [usedFiftyFifty, setUsedFiftyFifty] = useState(false);
   const [usedQueenBoost, setUsedQueenBoost] = useState(false);
 
-  // Kontrol musik kalem saat sesi live playing berlangsung
+  // Kontrol musik ceria saat sesi live playing berlangsung
   useEffect(() => {
     setIsMuted(sound.getMuted());
 
@@ -228,7 +228,8 @@ export default function PlayerJoinAndPlayPage() {
     }
   }, [room?.status, room?.id, isSelfFinished]);
 
-  const goToNextQuestion = useCallback(() => {
+  // Pindah ke soal berikutnya & laporkan nomor soal terbaru ke Supabase (untuk layar guru)
+  const goToNextQuestion = useCallback(async () => {
     setFeedback(null);
     setLastPoints(null);
     setEliminatedOptions([]);
@@ -237,11 +238,24 @@ export default function PlayerJoinAndPlayPage() {
 
     if (localQIndex + 1 >= questions.length) {
       setIsSelfFinished(true);
+      if (player?.id) {
+        await supabase
+          .from("players")
+          .update({ is_finished: true })
+          .eq("id", player.id);
+      }
     } else {
-      setLocalQIndex((prev) => prev + 1);
+      const nextIdx = localQIndex + 1;
+      setLocalQIndex(nextIdx);
       setTimeLeft(QUESTION_TIME);
+      if (player?.id) {
+        await supabase
+          .from("players")
+          .update({ current_question_index: nextIdx })
+          .eq("id", player.id);
+      }
     }
-  }, [localQIndex, questions.length]);
+  }, [localQIndex, questions.length, player?.id]);
 
   // Timer mandiri siswa
   useEffect(() => {
@@ -306,6 +320,8 @@ export default function PlayerJoinAndPlayPage() {
           piece_skin: selectedAvatar,
           score: 0,
           streak: 0,
+          current_question_index: 0,
+          is_finished: false,
         },
       ])
       .select()
@@ -477,7 +493,6 @@ export default function PlayerJoinAndPlayPage() {
     );
   }
 
-  // Jika siswa sudah selesai sendiri ATAU guru mengakhiri permainan duluan
   if (room.status === "finished" || isSelfFinished) {
     const myRank = leaderboard.findIndex((p) => p.id === player.id) + 1;
     return (
@@ -518,7 +533,7 @@ export default function PlayerJoinAndPlayPage() {
 
             {room.status !== "finished" && (
               <p className="text-sm font-bold text-slate-500 mb-6 animate-pulse">
-                Menunggu guru mengakhiri permainan untuk melihat hasil kelas...
+                Menunggu guru mengakhiri permainan untuk melihat podium kelas...
               </p>
             )}
 
