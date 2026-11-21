@@ -4,6 +4,8 @@ import React, { useState, useEffect, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Footprints, Eye, EyeOff, Sparkles } from "lucide-react";
 import { sound } from "@/lib/sound";
+import { useLanguage } from "@/components/LanguageProvider";
+import { PIECE_META_I18N } from "@/lib/i18n";
 
 export type PieceType =
   | "PAWN"
@@ -17,8 +19,12 @@ export type OptionKey = "A" | "B" | "C" | "D";
 export interface QuestionData {
   id: string;
   question_text: string;
+  image_url?: string | null;
   options: Record<OptionKey, string>;
   correct_option: OptionKey;
+  correct_options?: OptionKey[];
+  allow_multiple?: boolean;
+  time_limit?: number;
   piece_type: PieceType;
   obstacles?: number;
 }
@@ -336,6 +342,8 @@ export default function ChessQuizBoard({
   disabled = false,
   onAnswer,
 }: ChessQuizBoardProps) {
+  const { lang, t } = useLanguage();
+
   const basePiece: PieceType =
     question?.piece_type && PIECE_META[question.piece_type]
       ? question.piece_type
@@ -345,6 +353,13 @@ export default function ChessQuizBoard({
     activePiece && PIECE_META[activePiece] ? activePiece : basePiece;
 
   const pieceInfo = PIECE_META[resolvedPiece];
+  const localizedPiece = PIECE_META_I18N?.[lang]?.[resolvedPiece] || pieceInfo;
+
+  const validCorrectOptions: OptionKey[] = useMemo(() => {
+    return question?.correct_options && question.correct_options.length > 0
+      ? question.correct_options
+      : [question.correct_option];
+  }, [question]);
 
   const [playerPos, setPlayerPos] = useState<Position>({ row: 2, col: 2 });
   const [obstacles, setObstacles] = useState<Position[]>([]);
@@ -418,7 +433,7 @@ export default function ChessQuizBoard({
 
     if (hitOption) {
       setAnsweredOption(hitOption);
-      const isCorrect = hitOption === question.correct_option;
+      const isCorrect = validCorrectOptions.includes(hitOption);
       if (isCorrect) sound.playCorrect();
       else sound.playWrong();
       onAnswer(hitOption, isCorrect, nextMoves);
@@ -433,14 +448,14 @@ export default function ChessQuizBoard({
       <div className="flex items-center justify-between gap-2 bg-[#EEF6FF] border-2 border-[#D4E7FF] p-3 rounded-2xl mb-3">
         <div className="flex items-center gap-3">
           <div
-            className={`w-12 h-12 rounded-2xl ${pieceInfo.badgeColor} text-white flex items-center justify-center text-3xl shadow-md border-b-4 border-black/20 shrink-0`}
+            className={`w-12 h-12 rounded-2xl ${pieceInfo.badgeColor} text-white flex items-center justify-center text-3xl leading-none shadow-md border-b-4 border-black/20 shrink-0`}
           >
             {pieceInfo.symbol}
           </div>
           <div>
             <div className="flex items-center gap-1.5">
               <h3 className="font-extrabold text-slate-800 text-sm sm:text-base">
-                {pieceInfo.name}
+                {localizedPiece.name}
               </h3>
               {resolvedPiece !== basePiece && (
                 <span className="inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full bg-purple-500 text-white">
@@ -449,20 +464,22 @@ export default function ChessQuizBoard({
               )}
             </div>
             <p className="text-xs font-medium text-slate-500 leading-snug">
-              {pieceInfo.hint}
+              {localizedPiece.hint}
             </p>
           </div>
         </div>
 
         <div className="flex flex-col sm:flex-row items-end sm:items-center gap-1.5 shrink-0">
-          <span className="inline-flex items-center gap-1 text-xs font-extrabold px-2.5 py-1.5 rounded-xl bg-white text-sky-600 border border-sky-200 shadow-xs">
+          <span
+            title={t("stepsLabel")}
+            className="inline-flex items-center gap-1 text-xs font-extrabold px-2.5 py-1.5 rounded-xl bg-white text-sky-600 border border-sky-200 shadow-xs"
+          >
             <Footprints className="w-3.5 h-3.5" />
             {movesUsed}
           </span>
           <button
             type="button"
             onClick={() => setShowHints((prev) => !prev)}
-            title="Tampilkan/Sembunyikan Petunjuk Langkah"
             className="inline-flex items-center gap-1 text-xs font-bold px-2.5 py-1.5 rounded-xl bg-white hover:bg-sky-50 text-slate-600 border border-slate-200 transition cursor-pointer"
           >
             {showHints ? (
@@ -471,15 +488,15 @@ export default function ChessQuizBoard({
               <EyeOff className="w-3.5 h-3.5 text-slate-400" />
             )}
             <span className="hidden sm:inline">
-              {showHints ? "Bantuan" : "Sembunyi"}
+              {showHints ? t("hintShow") : t("hintHide")}
             </span>
           </button>
         </div>
       </div>
 
-      {/* Papan Catur Cerah Ramah Anak */}
-      <div className="p-2.5 sm:p-3 rounded-3xl bg-[#DCEBFA] border-2 border-[#C2DDF8] border-b-[6px] shadow-inner w-full">
-        <div className="grid grid-cols-6 w-full aspect-square rounded-2xl overflow-hidden border-2 border-[#B3D4F5] bg-white shadow-sm">
+      {/* Papan Catur Ukuran Fixed 6x6 */}
+      <div className="w-full max-w-[440px] mx-auto p-2.5 sm:p-3 rounded-3xl bg-[#DCEBFA] border-2 border-[#C2DDF8] border-b-[6px] shadow-inner">
+        <div className="grid grid-cols-6 grid-rows-6 w-full aspect-square rounded-2xl overflow-hidden border-2 border-[#B3D4F5] bg-white shadow-sm">
           {Array.from({ length: BOARD_SIZE }).map((_, row) =>
             Array.from({ length: BOARD_SIZE }).map((__, col) => {
               const isDark = (row + col) % 2 === 1;
@@ -505,10 +522,9 @@ export default function ChessQuizBoard({
                 : "bg-[#FFFFFF] hover:bg-[#F4F9FF]";
 
               if (answeredOption && isPlayerHere) {
-                tileBg =
-                  answeredOption === question.correct_option
-                    ? "bg-emerald-200"
-                    : "bg-rose-200";
+                tileBg = validCorrectOptions.includes(answeredOption)
+                  ? "bg-emerald-200"
+                  : "bg-rose-200";
               }
 
               return (
@@ -516,26 +532,28 @@ export default function ChessQuizBoard({
                   type="button"
                   key={`${row}-${col}`}
                   onClick={() => handleSquareClick(row, col)}
-                  className={`relative flex items-center justify-center transition-colors duration-150 ${tileBg} ${
+                  className={`relative w-full h-full aspect-square overflow-hidden p-0 flex items-center justify-center transition-colors duration-150 ${tileBg} ${
                     isLegalMove ? "cursor-pointer" : "cursor-default"
                   }`}
                 >
                   {/* Koordinat Sudut Lembut */}
                   {col === 0 && (
-                    <span className="absolute top-1 left-1.5 text-[10px] font-extrabold text-sky-900/30 pointer-events-none">
+                    <span className="absolute top-1 left-1.5 text-[10px] font-extrabold leading-none text-sky-900/30 pointer-events-none">
                       {BOARD_SIZE - row}
                     </span>
                   )}
                   {row === BOARD_SIZE - 1 && (
-                    <span className="absolute bottom-0.5 right-1.5 text-[10px] font-extrabold text-sky-900/30 pointer-events-none">
+                    <span className="absolute bottom-1 right-1.5 text-[10px] font-extrabold leading-none text-sky-900/30 pointer-events-none">
                       {COL_LABELS[col]}
                     </span>
                   )}
 
-                  {/* Balok Rintangan Kayu/Pagar Lucu */}
+                  {/* Balok Rintangan Kayu/Pagar */}
                   {isObstacle && (
-                    <div className="w-[74%] h-[74%] rounded-2xl bg-gradient-to-b from-amber-200 to-amber-300 border-2 border-amber-400 border-b-4 shadow-xs flex items-center justify-center">
-                      <span className="text-lg sm:text-xl select-none">🧱</span>
+                    <div className="w-[74%] h-[74%] rounded-2xl bg-gradient-to-b from-amber-200 to-amber-300 border-2 border-amber-400 border-b-4 shadow-xs flex items-center justify-center pointer-events-none">
+                      <span className="text-base sm:text-xl leading-none select-none">
+                        🧱
+                      </span>
                     </div>
                   )}
 
@@ -544,7 +562,7 @@ export default function ChessQuizBoard({
                     <motion.span
                       animate={{ scale: [0.85, 1.15, 0.85] }}
                       transition={{ repeat: Infinity, duration: 1.4 }}
-                      className="w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-emerald-400 border-2 border-white shadow-md"
+                      className="w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-emerald-400 border-2 border-white shadow-md pointer-events-none"
                     />
                   )}
 
@@ -565,7 +583,7 @@ export default function ChessQuizBoard({
                           stiffness: 380,
                           damping: 20,
                         }}
-                        className={`flex items-center justify-center w-[76%] h-[76%] rounded-2xl bg-gradient-to-b ${OPTION_STYLES[targetKey].tokenBg} text-white font-black text-lg sm:text-xl shadow-md border-2 border-white/60 border-b-4 ${OPTION_STYLES[targetKey].tokenBorder}`}
+                        className={`flex items-center justify-center w-[76%] h-[76%] rounded-2xl bg-gradient-to-b ${OPTION_STYLES[targetKey].tokenBg} text-white font-black text-base sm:text-xl leading-none shadow-md border-2 border-white/60 border-b-4 ${OPTION_STYLES[targetKey].tokenBorder} pointer-events-none`}
                       >
                         {targetKey}
                       </motion.div>
@@ -575,13 +593,14 @@ export default function ChessQuizBoard({
                   {/* Bidak Pemain */}
                   {isPlayerHere && (
                     <motion.div
+                      layout="position"
                       layoutId="active-chess-piece"
                       transition={{
                         type: "spring",
                         stiffness: 420,
                         damping: 26,
                       }}
-                      className="z-10 flex items-center justify-center w-[80%] h-[80%] rounded-2xl bg-gradient-to-b from-[#FFE066] to-[#FFB800] text-slate-900 text-3xl sm:text-4xl shadow-lg border-2 border-white border-b-4 border-b-[#CC8E00]"
+                      className="z-10 flex items-center justify-center w-[78%] h-[78%] rounded-2xl bg-gradient-to-b from-[#FFE066] to-[#FFB800] text-slate-900 text-2xl sm:text-4xl leading-none shadow-lg border-2 border-white border-b-4 border-b-[#CC8E00] pointer-events-none"
                     >
                       {pieceInfo.symbol}
                     </motion.div>

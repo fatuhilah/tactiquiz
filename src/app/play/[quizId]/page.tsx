@@ -28,6 +28,9 @@ import ChessQuizBoard, {
   PIECE_META,
   OPTION_STYLES,
 } from "@/components/ChessQuizBoard";
+import FormattedText from "@/components/FormattedText";
+import { useLanguage } from "@/components/LanguageProvider";
+import { PIECE_META_I18N } from "@/lib/i18n";
 import { supabase } from "@/lib/supabase";
 import { sound } from "@/lib/sound";
 
@@ -45,16 +48,20 @@ const DEMO_QUESTIONS: QuestionData[] = [
       "Planet manakah yang dijuluki sebagai Planet Merah di tata surya kita?",
     options: { A: "Venus", B: "Mars", C: "Jupiter", D: "Saturnus" },
     correct_option: "B",
+    correct_options: ["B"],
     piece_type: "KNIGHT",
     obstacles: 3,
+    time_limit: 60,
   },
   {
     id: "2",
     question_text: "Berapakah hasil perkalian dari 12 × 8?",
     options: { A: "84", B: "92", C: "96", D: "108" },
     correct_option: "C",
+    correct_options: ["C"],
     piece_type: "BISHOP",
     obstacles: 3,
+    time_limit: 60,
   },
   {
     id: "3",
@@ -62,24 +69,30 @@ const DEMO_QUESTIONS: QuestionData[] = [
       "Bahasa pemrograman apa yang berjalan langsung di dalam browser web?",
     options: { A: "JavaScript", B: "Python", C: "C++", D: "Go" },
     correct_option: "A",
+    correct_options: ["A"],
     piece_type: "ROOK",
     obstacles: 4,
+    time_limit: 60,
   },
   {
     id: "4",
     question_text: 'Unsur kimia dengan simbol "Au" adalah...',
     options: { A: "Perak", B: "Aluminium", C: "Emas", D: "Tembaga" },
     correct_option: "C",
+    correct_options: ["C"],
     piece_type: "KING",
     obstacles: 3,
+    time_limit: 60,
   },
   {
     id: "5",
     question_text: "Di negara manakah Candi Borobudur berada?",
     options: { A: "Thailand", B: "Kamboja", C: "Vietnam", D: "Indonesia" },
     correct_option: "D",
+    correct_options: ["D"],
     piece_type: "PAWN",
     obstacles: 2,
+    time_limit: 60,
   },
   {
     id: "6",
@@ -87,20 +100,101 @@ const DEMO_QUESTIONS: QuestionData[] = [
       "Hewan darat tercepat di dunia yang mampu berlari hingga 110 km/jam adalah...",
     options: { A: "Singa", B: "Cheetah", C: "Kuda", D: "Kangguru" },
     correct_option: "B",
+    correct_options: ["B"],
     piece_type: "QUEEN",
     obstacles: 4,
+    time_limit: 60,
   },
 ];
 
-const QUESTION_TIME = 60;
+const DEMO_QUESTIONS_EN: QuestionData[] = [
+  {
+    id: "1",
+    question_text:
+      "Which planet is known as the Red Planet in our solar system?",
+    options: { A: "Venus", B: "Mars", C: "Jupiter", D: "Saturn" },
+    correct_option: "B",
+    correct_options: ["B"],
+    piece_type: "KNIGHT",
+    obstacles: 3,
+    time_limit: 60,
+  },
+  {
+    id: "2",
+    question_text: "What is the result of 12 × 8?",
+    options: { A: "84", B: "92", C: "96", D: "108" },
+    correct_option: "C",
+    correct_options: ["C"],
+    piece_type: "BISHOP",
+    obstacles: 3,
+    time_limit: 60,
+  },
+  {
+    id: "3",
+    question_text:
+      "Which programming language runs natively inside a web browser?",
+    options: { A: "JavaScript", B: "Python", C: "C++", D: "Go" },
+    correct_option: "A",
+    correct_options: ["A"],
+    piece_type: "ROOK",
+    obstacles: 4,
+    time_limit: 60,
+  },
+  {
+    id: "4",
+    question_text: 'Which chemical element has the symbol "Au"?',
+    options: { A: "Silver", B: "Aluminum", C: "Gold", D: "Copper" },
+    correct_option: "C",
+    correct_options: ["C"],
+    piece_type: "KING",
+    obstacles: 3,
+    time_limit: 60,
+  },
+  {
+    id: "5",
+    question_text: "In which country is Borobudur Temple located?",
+    options: { A: "Thailand", B: "Cambodia", C: "Vietnam", D: "Indonesia" },
+    correct_option: "D",
+    correct_options: ["D"],
+    piece_type: "PAWN",
+    obstacles: 2,
+    time_limit: 60,
+  },
+  {
+    id: "6",
+    question_text:
+      "What is the fastest land animal capable of running up to 110 km/h?",
+    options: { A: "Lion", B: "Cheetah", C: "Horse", D: "Kangaroo" },
+    correct_option: "B",
+    correct_options: ["B"],
+    piece_type: "QUEEN",
+    obstacles: 4,
+    time_limit: 60,
+  },
+];
+
+const DEFAULT_QUESTION_TIME = 60;
+
+function formatSeconds(sec: number): string {
+  const s = Math.max(0, Math.ceil(sec));
+  if (s < 60) return `${s}s`;
+  const mins = Math.floor(s / 60);
+  const rem = s % 60;
+  return `${mins}:${String(rem).padStart(2, "0")}`;
+}
 
 export default function PlayQuizPage() {
   const params = useParams();
   const router = useRouter();
   const quizId = params.quizId as string;
+  const { lang, t } = useLanguage();
 
   const [questions, setQuestions] = useState<QuestionData[]>([]);
-  const [quizTitle, setQuizTitle] = useState("Petualangan Catur");
+  const [quizTitle, setQuizTitle] = useState("");
+  const [timerMode, setTimerMode] = useState<"PER_QUESTION" | "TOTAL_QUIZ">(
+    "PER_QUESTION",
+  );
+  const [totalQuizSeconds, setTotalQuizSeconds] = useState<number>(300);
   const [loading, setLoading] = useState(true);
   const [isMuted, setIsMuted] = useState(false);
 
@@ -109,7 +203,8 @@ export default function PlayQuizPage() {
   const [streak, setStreak] = useState(0);
   const [maxStreak, setMaxStreak] = useState(0);
   const [correctCount, setCorrectCount] = useState(0);
-  const [timeLeft, setTimeLeft] = useState(QUESTION_TIME);
+  const [timeLeft, setTimeLeft] = useState(DEFAULT_QUESTION_TIME);
+  const [maxCurrentTime, setMaxCurrentTime] = useState(DEFAULT_QUESTION_TIME);
   const [lastPoints, setLastPoints] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<
     "CORRECT" | "WRONG" | "TIMEOUT" | null
@@ -117,14 +212,16 @@ export default function PlayQuizPage() {
   const [isFinished, setIsFinished] = useState(false);
 
   const [answerHistory, setAnswerHistory] = useState<AnswerRecord[]>([]);
-  const [reviewFilter, setReviewFilter] = useState<"ALL" | "WRONG">("ALL");
+  const [reviewFilter, setReviewFilter] = useState<"ALL" | "WRONG" | "CORRECT">(
+    "ALL",
+  );
 
   const [eliminatedOptions, setEliminatedOptions] = useState<OptionKey[]>([]);
   const [queenOverride, setQueenOverride] = useState(false);
   const [usedFiftyFifty, setUsedFiftyFifty] = useState(false);
   const [usedQueenBoost, setUsedQueenBoost] = useState(false);
 
-  // Sinkronisasi & kontrol musik latar kalem
+  // Sinkronisasi & kontrol musik latar
   useEffect(() => {
     setIsMuted(sound.getMuted());
 
@@ -134,7 +231,6 @@ export default function PlayQuizPage() {
       sound.stopMusic();
     }
 
-    // Fallback jika browser memblokir autoplay sebelum klik pertama
     const unlockAudio = () => {
       if (!sound.getMuted() && !isFinished) {
         sound.startMusic();
@@ -156,18 +252,28 @@ export default function PlayQuizPage() {
   useEffect(() => {
     async function loadQuiz() {
       if (quizId === "demo") {
-        setQuestions(DEMO_QUESTIONS);
-        setQuizTitle("Mode Latihan Demo");
+        setQuestions(lang === "EN" ? DEMO_QUESTIONS_EN : DEMO_QUESTIONS);
+        setQuizTitle(
+          lang === "EN" ? "Demo Practice Mode" : "Mode Latihan Demo",
+        );
+        setTimerMode("PER_QUESTION");
+        setTimeLeft(DEFAULT_QUESTION_TIME);
+        setMaxCurrentTime(DEFAULT_QUESTION_TIME);
         setLoading(false);
         return;
       }
 
       const { data: quiz } = await supabase
         .from("quizzes")
-        .select("title")
+        .select("title, timer_mode, total_time_seconds")
         .eq("id", quizId)
         .single();
 
+      const mode =
+        (quiz?.timer_mode as "PER_QUESTION" | "TOTAL_QUIZ") || "PER_QUESTION";
+      const totalSec = quiz?.total_time_seconds || 300;
+      setTimerMode(mode);
+      setTotalQuizSeconds(totalSec);
       if (quiz) setQuizTitle(quiz.title);
 
       const { data: qRows } = await supabase
@@ -180,6 +286,7 @@ export default function PlayQuizPage() {
         const mapped: QuestionData[] = qRows.map((row) => ({
           id: row.id,
           question_text: row.question_text,
+          image_url: row.image_url || null,
           options: {
             A: row.option_a,
             B: row.option_b,
@@ -187,15 +294,29 @@ export default function PlayQuizPage() {
             D: row.option_d,
           },
           correct_option: row.correct_option as OptionKey,
+          correct_options:
+            Array.isArray(row.correct_options) && row.correct_options.length > 0
+              ? (row.correct_options as OptionKey[])
+              : [row.correct_option as OptionKey],
+          allow_multiple: Boolean(row.allow_multiple),
+          time_limit: row.time_limit || DEFAULT_QUESTION_TIME,
           piece_type: (row.piece_type || "KNIGHT") as PieceType,
           obstacles: row.obstacles ?? 3,
         }));
         setQuestions(mapped);
+
+        const initialDuration =
+          mode === "TOTAL_QUIZ"
+            ? totalSec
+            : mapped[0].time_limit || DEFAULT_QUESTION_TIME;
+        setTimeLeft(initialDuration);
+        setMaxCurrentTime(initialDuration);
       }
       setLoading(false);
     }
 
     loadQuiz();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [quizId]);
 
   const currentQuestion = questions[currentIndex];
@@ -212,30 +333,43 @@ export default function PlayQuizPage() {
     if (currentIndex + 1 >= questions.length) {
       setIsFinished(true);
     } else {
-      setCurrentIndex((prev) => prev + 1);
-      setTimeLeft(QUESTION_TIME);
+      const nextIdx = currentIndex + 1;
+      setCurrentIndex(nextIdx);
+      if (timerMode === "PER_QUESTION") {
+        const nextLimit =
+          questions[nextIdx]?.time_limit || DEFAULT_QUESTION_TIME;
+        setTimeLeft(nextLimit);
+        setMaxCurrentTime(nextLimit);
+      }
     }
-  }, [currentIndex, questions.length]);
+  }, [currentIndex, questions, timerMode]);
 
-  // 1. Jalankan timer mundur selama soal aktif
+  // 1. Timer mundur
   useEffect(() => {
-    if (loading || !currentQuestion || feedback || isFinished || timeLeft <= 0)
-      return;
+    if (loading || !currentQuestion || isFinished || timeLeft <= 0) return;
+    if (timerMode === "PER_QUESTION" && feedback) return;
 
     const timer = setInterval(() => {
       setTimeLeft((prev) => Math.max(0, Number((prev - 0.1).toFixed(1))));
     }, 100);
 
     return () => clearInterval(timer);
-  }, [loading, currentQuestion, feedback, isFinished, timeLeft]);
+  }, [loading, currentQuestion, feedback, isFinished, timeLeft, timerMode]);
 
   // 2. Tangani saat waktu habis (0 detik)
   useEffect(() => {
-    if (loading || !currentQuestion || feedback || isFinished) return;
+    if (loading || !currentQuestion || isFinished) return;
+    if (timerMode === "PER_QUESTION" && feedback) return;
 
     if (timeLeft <= 0) {
       sound.playWrong();
       setStreak(0);
+
+      if (timerMode === "TOTAL_QUIZ") {
+        setIsFinished(true);
+        return;
+      }
+
       setFeedback("TIMEOUT");
       setAnswerHistory((prev) => [
         ...prev,
@@ -247,21 +381,22 @@ export default function PlayQuizPage() {
         },
       ]);
     }
-  }, [timeLeft, loading, currentQuestion, feedback, isFinished]);
+  }, [timeLeft, loading, currentQuestion, feedback, isFinished, timerMode]);
 
   // 3. Otomatis lanjut ke soal berikutnya 1.8 detik setelah feedback muncul
   useEffect(() => {
     if (!feedback || isFinished) return;
 
-    const t = setTimeout(goToNextQuestion, 1800);
-    return () => clearTimeout(t);
+    const tNext = setTimeout(goToNextQuestion, 1800);
+    return () => clearTimeout(tNext);
   }, [feedback, isFinished, goToNextQuestion]);
 
-  // ⬇️ Tambahkan kembali blok ini
   if (loading) {
     return (
       <main className="min-h-screen bg-[#F2F7FC] flex items-center justify-center font-black text-slate-500">
-        Menyiapkan Papan Catur...
+        {lang === "EN"
+          ? "Preparing Chessboard..."
+          : "Menyiapkan Papan Catur..."}
       </main>
     );
   }
@@ -270,17 +405,23 @@ export default function PlayQuizPage() {
     return (
       <main className="min-h-screen bg-[#F2F7FC] flex flex-col items-center justify-center p-4 text-center">
         <p className="font-black text-xl text-slate-800 mb-3">
-          Kuis tidak ditemukan
+          {lang === "EN" ? "Quiz not found" : "Kuis tidak ditemukan"}
         </p>
         <button
           onClick={() => router.push("/")}
-          className="px-5 py-3 rounded-2xl bg-[#2B90FF] text-white font-black text-sm"
+          className="px-5 py-3 rounded-2xl bg-[#2B90FF] text-white font-black text-sm cursor-pointer"
         >
-          Kembali ke Beranda
+          {lang === "EN" ? "Back to Home" : "Kembali ke Beranda"}
         </button>
       </main>
     );
   }
+
+  const validCorrectKeys: OptionKey[] =
+    currentQuestion.correct_options &&
+    currentQuestion.correct_options.length > 0
+      ? currentQuestion.correct_options
+      : [currentQuestion.correct_option];
 
   const handleAnswer = (
     selected: OptionKey,
@@ -302,7 +443,9 @@ export default function PlayQuizPage() {
     if (isCorrect) {
       const nextStreak = streak + 1;
       const multiplier = nextStreak >= 3 ? 1.5 : nextStreak === 2 ? 1.2 : 1;
-      const speedBonus = Math.round((timeLeft / QUESTION_TIME) * 50);
+      const speedBonus = Math.round(
+        (timeLeft / Math.max(1, maxCurrentTime)) * 50,
+      );
       const efficiencyBonus = movesUsed === 1 ? 25 : 0;
       const earned = Math.round(
         (100 + speedBonus + efficiencyBonus) * multiplier,
@@ -324,7 +467,7 @@ export default function PlayQuizPage() {
     if (usedFiftyFifty || feedback) return;
     sound.playPowerUp();
     const wrongKeys = (["A", "B", "C", "D"] as OptionKey[]).filter(
-      (k) => k !== currentQuestion.correct_option,
+      (k) => !validCorrectKeys.includes(k),
     );
     const shuffledWrong = [...wrongKeys].sort(() => Math.random() - 0.5);
     setEliminatedOptions(shuffledWrong.slice(0, 2));
@@ -344,7 +487,12 @@ export default function PlayQuizPage() {
     setStreak(0);
     setMaxStreak(0);
     setCorrectCount(0);
-    setTimeLeft(QUESTION_TIME);
+    const initialDuration =
+      timerMode === "TOTAL_QUIZ"
+        ? totalQuizSeconds
+        : questions[0]?.time_limit || DEFAULT_QUESTION_TIME;
+    setTimeLeft(initialDuration);
+    setMaxCurrentTime(initialDuration);
     setFeedback(null);
     setLastPoints(null);
     setAnswerHistory([]);
@@ -356,13 +504,21 @@ export default function PlayQuizPage() {
     setIsFinished(false);
   };
 
+  const displayTitle =
+    quizId === "demo"
+      ? lang === "EN"
+        ? "Demo Practice Mode"
+        : "Mode Latihan Demo"
+      : quizTitle;
+
   if (isFinished) {
     const accuracy = Math.round((correctCount / questions.length) * 100);
     const wrongCount = answerHistory.filter((item) => !item.isCorrect).length;
-    const displayedHistory =
-      reviewFilter === "WRONG"
-        ? answerHistory.filter((item) => !item.isCorrect)
-        : answerHistory;
+    const displayedHistory = answerHistory.filter((item) => {
+      if (reviewFilter === "WRONG") return !item.isCorrect;
+      if (reviewFilter === "CORRECT") return item.isCorrect;
+      return true;
+    });
 
     return (
       <main className="min-h-screen bg-[#F2F7FC] text-slate-800 py-8 px-4 sm:px-6">
@@ -376,15 +532,15 @@ export default function PlayQuizPage() {
               <Trophy className="w-10 h-10 text-amber-900" />
             </div>
             <h1 className="text-3xl font-black text-slate-800 tracking-tight">
-              Hebat Sekali! 🎉
+              {lang === "EN" ? "Awesome Job! 🎉" : "Hebat Sekali! 🎉"}
             </h1>
             <p className="text-base font-medium text-slate-500 mt-1">
-              {quizTitle}
+              {displayTitle}
             </p>
 
             <div className="my-6 p-5 rounded-3xl bg-[#EEF6FF] border-2 border-[#D4E7FF]">
               <p className="text-xs font-extrabold uppercase tracking-wider text-sky-600">
-                Total Bintang Skor
+                {t("totalStarsLabel")}
               </p>
               <p className="text-5xl font-black text-[#1E82F5] mt-1 flex items-center justify-center gap-2">
                 <Star className="w-9 h-9 fill-amber-400 text-amber-400" />
@@ -395,7 +551,7 @@ export default function PlayQuizPage() {
             <div className="grid grid-cols-2 gap-4 mb-7">
               <div className="p-4 rounded-2xl bg-emerald-50 border-2 border-emerald-200">
                 <p className="text-xs font-bold text-emerald-700">
-                  Jawaban Benar
+                  {t("correctCountLabel")}
                 </p>
                 <p className="text-2xl font-black text-emerald-600 mt-0.5">
                   {correctCount}/{questions.length} ({accuracy}%)
@@ -403,7 +559,7 @@ export default function PlayQuizPage() {
               </div>
               <div className="p-4 rounded-2xl bg-orange-50 border-2 border-orange-200">
                 <p className="text-xs font-bold text-orange-700">
-                  Beruntun Terbaik
+                  {lang === "EN" ? "Best Streak" : "Beruntun Terbaik"}
                 </p>
                 <p className="text-2xl font-black text-orange-500 mt-0.5 flex items-center justify-center gap-1">
                   <Flame className="w-6 h-6 fill-orange-500" /> {maxStreak}x
@@ -416,56 +572,70 @@ export default function PlayQuizPage() {
                 href="/"
                 className="py-4 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-black text-base flex items-center justify-center gap-2 border-b-4 border-slate-300 transition"
               >
-                <Home className="w-5 h-5" /> Beranda
+                <Home className="w-5 h-5" /> {t("home")}
               </Link>
               <button
                 onClick={resetGame}
                 className="py-4 rounded-2xl bg-[#22C55E] hover:bg-[#1EB054] text-white font-black text-base flex items-center justify-center gap-2 border-b-4 border-[#15803D] shadow-md transition cursor-pointer"
               >
-                <RotateCcw className="w-5 h-5" /> Main Lagi
+                <RotateCcw className="w-5 h-5" />{" "}
+                {lang === "EN" ? "Play Again" : "Main Lagi"}
               </button>
             </div>
           </motion.div>
 
-          {/* Pembahasan Soal */}
+          {/* Pembahasan Soal (Anti-Truncate) */}
           <div className="bg-white border-2 border-slate-200/90 border-b-[6px] rounded-[32px] p-6 sm:p-7 shadow-md">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
               <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-2xl bg-sky-100 text-[#2589FF] flex items-center justify-center">
+                <div className="w-10 h-10 rounded-2xl bg-sky-100 text-[#2589FF] flex items-center justify-center shrink-0">
                   <BookOpen className="w-5 h-5" />
                 </div>
                 <div>
                   <h2 className="text-xl font-black text-slate-800">
-                    Pembahasan Soal
+                    {t("reviewTitle")}
                   </h2>
                   <p className="text-xs font-bold text-slate-400">
-                    Periksa kembali jawabanmu dan kunci jawaban yang benar
+                    {lang === "EN"
+                      ? "Review your answers and the correct keys"
+                      : "Periksa kembali jawabanmu dan kunci jawaban yang benar"}
                   </p>
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 bg-[#F2F7FC] p-1.5 rounded-2xl border border-slate-200 self-start">
+              <div className="flex items-center gap-1.5 bg-[#F2F7FC] p-1.5 rounded-2xl border border-slate-200 self-start">
                 <button
                   type="button"
                   onClick={() => setReviewFilter("ALL")}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
                     reviewFilter === "ALL"
                       ? "bg-[#2B90FF] text-white shadow-xs"
                       : "text-slate-600 hover:text-slate-900"
                   }`}
                 >
-                  Semua ({answerHistory.length})
+                  {t("filterAll")} ({answerHistory.length})
                 </button>
                 <button
                   type="button"
                   onClick={() => setReviewFilter("WRONG")}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
+                  className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
                     reviewFilter === "WRONG"
                       ? "bg-rose-500 text-white shadow-xs"
                       : "text-slate-600 hover:text-slate-900"
                   }`}
                 >
-                  Salah ({wrongCount})
+                  {t("filterWrong")} ({wrongCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReviewFilter("CORRECT")}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer ${
+                    reviewFilter === "CORRECT"
+                      ? "bg-emerald-500 text-white shadow-xs"
+                      : "text-slate-600 hover:text-slate-900"
+                  }`}
+                >
+                  {t("filterCorrect")} ({correctCount})
                 </button>
               </div>
             </div>
@@ -473,7 +643,9 @@ export default function PlayQuizPage() {
             {displayedHistory.length === 0 ? (
               <div className="text-center py-10 bg-emerald-50/70 rounded-2xl border-2 border-emerald-200">
                 <p className="text-lg font-black text-emerald-700">
-                  Sempurna! Tidak ada jawaban yang salah 🌟
+                  {lang === "EN"
+                    ? "No questions in this filter 🌟"
+                    : "Tidak ada soal pada kategori ini 🌟"}
                 </p>
               </div>
             ) : (
@@ -484,6 +656,15 @@ export default function PlayQuizPage() {
                   );
                   const pieceMeta =
                     PIECE_META[record.question.piece_type] || PIECE_META.KNIGHT;
+                  const localizedPiece =
+                    PIECE_META_I18N?.[lang]?.[record.question.piece_type] ||
+                    pieceMeta;
+
+                  const recordCorrectKeys =
+                    record.question.correct_options &&
+                    record.question.correct_options.length > 0
+                      ? record.question.correct_options
+                      : [record.question.correct_option];
 
                   return (
                     <div
@@ -497,80 +678,101 @@ export default function PlayQuizPage() {
                       <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                         <div className="flex items-center gap-2">
                           <span className="px-3 py-1 rounded-xl bg-slate-800 text-white text-xs font-black">
-                            Soal #{qIndex + 1}
+                            {lang === "EN"
+                              ? `Question #${qIndex + 1}`
+                              : `Soal #${qIndex + 1}`}
                           </span>
                           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-amber-100 text-amber-800 text-xs font-extrabold">
-                            {pieceMeta.symbol} {pieceMeta.name}
+                            {pieceMeta.symbol} {localizedPiece.name}
                           </span>
                           {record.movesUsed > 0 && (
                             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-sky-100 text-sky-700 text-xs font-extrabold">
                               <Footprints className="w-3 h-3" />{" "}
-                              {record.movesUsed} langkah
+                              {record.movesUsed}{" "}
+                              {lang === "EN" ? "moves" : "langkah"}
                             </span>
                           )}
                         </div>
 
                         {record.isCorrect ? (
                           <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-emerald-100 text-emerald-700 text-xs font-black">
-                            <CheckCircle2 className="w-3.5 h-3.5" /> Benar
+                            <CheckCircle2 className="w-3.5 h-3.5" />{" "}
+                            {t("filterCorrect")}
                           </span>
                         ) : (
                           <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-rose-100 text-rose-700 text-xs font-black">
                             <XCircle className="w-3.5 h-3.5" />{" "}
                             {record.selectedOption === null
-                              ? "Waktu Habis"
-                              : "Kurang Tepat"}
+                              ? t("timeoutFeedback")
+                              : t("wrongFeedback")}
                           </span>
                         )}
                       </div>
 
+                      {record.question.image_url && (
+                        <img
+                          src={record.question.image_url}
+                          alt="Question"
+                          className="max-h-44 rounded-2xl mb-3 object-contain border border-slate-200 bg-white"
+                        />
+                      )}
+
                       <p className="font-extrabold text-base sm:text-lg text-slate-800 mb-4 leading-snug">
-                        {record.question.question_text}
+                        <FormattedText text={record.question.question_text} />
                       </p>
 
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                         {(["A", "B", "C", "D"] as OptionKey[]).map((key) => {
-                          const isKeyCorrect =
-                            key === record.question.correct_option;
+                          const isKeyCorrect = recordCorrectKeys.includes(key);
                           const isUserChoice = key === record.selectedOption;
                           const style = OPTION_STYLES[key];
 
                           let boxStyle =
-                            "bg-white border-slate-200 text-slate-600";
+                            "bg-white border-slate-200 text-slate-700";
                           if (isKeyCorrect) {
                             boxStyle =
-                              "bg-emerald-50 border-emerald-400 text-emerald-900 ring-2 ring-emerald-400/30";
+                              "bg-emerald-50 border-emerald-400 text-emerald-950 ring-2 ring-emerald-400/30";
                           } else if (isUserChoice && !record.isCorrect) {
                             boxStyle =
-                              "bg-rose-50 border-rose-400 text-rose-900 ring-2 ring-rose-400/30";
+                              "bg-rose-50 border-rose-400 text-rose-950 ring-2 ring-rose-400/30";
                           }
 
                           return (
                             <div
                               key={key}
-                              className={`flex items-center justify-between gap-2 p-3 rounded-2xl border-2 ${boxStyle}`}
+                              className={`flex items-start justify-between gap-2.5 p-3 rounded-2xl border-2 ${boxStyle}`}
                             >
-                              <div className="flex items-center gap-2.5 min-w-0">
+                              <div className="flex items-start gap-2.5 min-w-0 flex-1">
                                 <span
-                                  className={`w-7 h-7 rounded-lg ${style.badgeBg} text-white font-black text-xs flex items-center justify-center shrink-0`}
+                                  className={`w-7 h-7 rounded-lg ${style.badgeBg} text-white font-black text-xs flex items-center justify-center shrink-0 mt-0.5`}
                                 >
                                   {key}
                                 </span>
-                                <span className="text-sm font-extrabold truncate">
-                                  {record.question.options[key]}
+                                <span className="text-sm font-extrabold whitespace-normal break-words leading-snug">
+                                  <FormattedText
+                                    text={record.question.options[key]}
+                                  />
                                 </span>
                               </div>
 
-                              {isKeyCorrect && (
-                                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-500 text-white shrink-0">
-                                  ✓ Kunci
-                                </span>
-                              )}
-                              {isUserChoice && !isKeyCorrect && (
-                                <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-rose-500 text-white shrink-0">
-                                  Pilihanmu
-                                </span>
-                              )}
+                              <div className="flex flex-col items-end gap-1 shrink-0">
+                                {isKeyCorrect && (
+                                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-500 text-white whitespace-nowrap">
+                                    {lang === "EN" ? "✓ Key" : "✓ Kunci"}
+                                  </span>
+                                )}
+                                {isUserChoice && (
+                                  <span
+                                    className={`text-[10px] font-black px-2 py-0.5 rounded-full text-white whitespace-nowrap ${
+                                      isKeyCorrect
+                                        ? "bg-sky-500"
+                                        : "bg-rose-500"
+                                    }`}
+                                  >
+                                    {lang === "EN" ? "Your Pick" : "Pilihanmu"}
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           );
                         })}
@@ -587,7 +789,7 @@ export default function PlayQuizPage() {
   }
 
   const progressPercent = ((currentIndex + 1) / questions.length) * 100;
-  const timerPercent = (timeLeft / QUESTION_TIME) * 100;
+  const timerPercent = (timeLeft / Math.max(1, maxCurrentTime)) * 100;
 
   return (
     <main className="min-h-screen bg-[#F2F7FC] text-slate-800 pb-8">
@@ -602,7 +804,7 @@ export default function PlayQuizPage() {
                 Tacti<span className="text-[#2589FF]">Quiz</span>
               </span>
               <span className="text-[11px] font-bold text-slate-400 truncate max-w-[120px] sm:max-w-[160px] block">
-                {quizTitle}
+                {displayTitle}
               </span>
             </div>
           </Link>
@@ -610,7 +812,9 @@ export default function PlayQuizPage() {
           <div className="hidden md:flex flex-col flex-1 max-w-md mx-4">
             <div className="flex justify-between text-xs font-extrabold text-slate-500 mb-1.5">
               <span>
-                Pertanyaan {currentIndex + 1} dari {questions.length}
+                {lang === "EN"
+                  ? `Question ${currentIndex + 1} of ${questions.length}`
+                  : `Pertanyaan ${currentIndex + 1} dari ${questions.length}`}
               </span>
               <span className="text-[#2589FF]">
                 {Math.round(progressPercent)}%
@@ -630,7 +834,13 @@ export default function PlayQuizPage() {
               type="button"
               onClick={handleToggleMusic}
               title={
-                isMuted ? "Nyalakan Musik Belajar" : "Matikan Musik (Mute)"
+                isMuted
+                  ? lang === "EN"
+                    ? "Turn On Study Music"
+                    : "Nyalakan Musik Belajar"
+                  : lang === "EN"
+                    ? "Mute Music"
+                    : "Matikan Musik (Mute)"
               }
               className={`flex items-center gap-1.5 px-3 py-2 rounded-2xl border-2 font-black text-xs sm:text-sm transition cursor-pointer ${
                 isMuted
@@ -641,12 +851,12 @@ export default function PlayQuizPage() {
               {isMuted ? (
                 <>
                   <VolumeX className="w-4 h-4" />
-                  <span className="hidden sm:inline">Mute</span>
+                  <span className="hidden sm:inline">{t("musicMuted")}</span>
                 </>
               ) : (
                 <>
                   <Volume2 className="w-4 h-4" />
-                  <span className="hidden sm:inline">Musik</span>
+                  <span className="hidden sm:inline">{t("musicOn")}</span>
                 </>
               )}
             </button>
@@ -677,16 +887,27 @@ export default function PlayQuizPage() {
         </div>
       </header>
 
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-5 sm:pt-7">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-5">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           <div className="lg:col-span-7 flex flex-col gap-5">
             <div className="relative overflow-hidden rounded-[28px] bg-gradient-to-br from-[#4AA8FF] via-[#2B90FF] to-[#1A73E8] p-6 sm:p-7 text-white shadow-lg border-b-[6px] border-[#1359B8]">
               <div className="absolute -right-8 -bottom-10 w-44 h-44 rounded-full bg-white/10 pointer-events-none" />
               <div className="flex items-center justify-between gap-3 mb-4">
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/20 text-xs font-extrabold">
-                  <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                  Soal #{currentIndex + 1}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/20 text-xs font-extrabold">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                    {lang === "EN"
+                      ? `Question #${currentIndex + 1}`
+                      : `Soal #${currentIndex + 1}`}
+                  </span>
+                  {currentQuestion.allow_multiple && (
+                    <span className="text-[11px] font-black bg-amber-300 text-slate-900 px-2.5 py-0.5 rounded-full">
+                      {lang === "EN"
+                        ? "✨ Multiple correct answers"
+                        : "✨ Lebih dari 1 jawaban benar"}
+                    </span>
+                  )}
+                </div>
 
                 <div className="flex items-center gap-2 bg-black/20 px-3 py-1 rounded-full">
                   <Clock className="w-3.5 h-3.5 text-amber-300" />
@@ -698,18 +919,28 @@ export default function PlayQuizPage() {
                       style={{ width: `${timerPercent}%` }}
                     />
                   </div>
-                  <span className="text-xs font-black w-7 text-right">
-                    {Math.ceil(timeLeft)}s
+                  <span className="text-xs font-black min-w-[2.2rem] text-right">
+                    {formatSeconds(timeLeft)}
                   </span>
                 </div>
               </div>
+
+              {currentQuestion.image_url && (
+                <div className="mb-4 bg-white/95 p-2 rounded-2xl shadow-inner">
+                  <img
+                    src={currentQuestion.image_url}
+                    alt="Question"
+                    className="max-h-56 mx-auto rounded-xl object-contain"
+                  />
+                </div>
+              )}
 
               <div className="flex items-center gap-4">
                 <div className="hidden sm:flex w-16 h-16 rounded-2xl bg-white/20 border-2 border-white/30 items-center justify-center text-4xl shrink-0">
                   🦉
                 </div>
                 <h1 className="text-xl sm:text-2xl font-black leading-snug tracking-tight">
-                  {currentQuestion.question_text}
+                  <FormattedText text={currentQuestion.question_text} />
                 </h1>
               </div>
             </div>
@@ -730,7 +961,8 @@ export default function PlayQuizPage() {
                     <>
                       <CheckCircle2 className="w-6 h-6 text-emerald-500 shrink-0" />
                       <span>
-                        Keren! Jawabanmu Tepat (+{lastPoints} Bintang)
+                        {t("correctFeedback")} (+{lastPoints}{" "}
+                        {lang === "EN" ? "Stars" : "Bintang"})
                       </span>
                     </>
                   ) : (
@@ -738,9 +970,12 @@ export default function PlayQuizPage() {
                       <XCircle className="w-6 h-6 text-rose-500 shrink-0" />
                       <span>
                         {feedback === "TIMEOUT"
-                          ? "Waktu habis! "
-                          : "Ups, kurang tepat! "}
-                        Jawaban benarnya adalah {currentQuestion.correct_option}
+                          ? `${t("timeoutFeedback")} `
+                          : `${t("wrongFeedback")} `}
+                        {t("correctAnswerIs")}{" "}
+                        {validCorrectKeys.join(
+                          lang === "EN" ? " or " : " atau ",
+                        )}
                       </span>
                     </>
                   )}
@@ -750,19 +985,19 @@ export default function PlayQuizPage() {
 
             <div>
               <p className="text-xs font-extrabold uppercase tracking-wider text-slate-400 mb-2.5 px-1">
-                Pilihan Jawaban (Tangkap hurufnya di papan catur!)
+                {t("optionsHeader")}
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 {(["A", "B", "C", "D"] as OptionKey[]).map((key) => {
                   const isEliminated = eliminatedOptions.includes(key);
                   const isCorrectOption =
-                    feedback && key === currentQuestion.correct_option;
+                    feedback && validCorrectKeys.includes(key);
                   const style = OPTION_STYLES[key];
 
                   return (
                     <div
                       key={key}
-                      className={`flex items-center gap-3.5 p-3.5 sm:p-4 rounded-2xl border-2 border-b-4 transition-all duration-200 ${
+                      className={`flex items-start gap-3.5 p-3.5 sm:p-4 rounded-2xl border-2 border-b-4 transition-all duration-200 ${
                         isEliminated
                           ? "opacity-35 line-through bg-slate-100 border-slate-200"
                           : isCorrectOption
@@ -775,8 +1010,8 @@ export default function PlayQuizPage() {
                       >
                         {key}
                       </span>
-                      <span className="text-base sm:text-lg font-extrabold text-slate-700 leading-tight">
-                        {currentQuestion.options[key]}
+                      <span className="text-base sm:text-lg font-extrabold text-slate-700 whitespace-normal break-words leading-snug pt-1">
+                        <FormattedText text={currentQuestion.options[key]} />
                       </span>
                     </div>
                   );
@@ -786,7 +1021,7 @@ export default function PlayQuizPage() {
 
             <div>
               <p className="text-xs font-extrabold uppercase tracking-wider text-slate-400 mb-2.5 px-1">
-                Kartu Bantuan Spesial
+                {t("powerupsHeader")}
               </p>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 <button
@@ -804,12 +1039,16 @@ export default function PlayQuizPage() {
                   </div>
                   <div>
                     <p className="font-extrabold text-sm text-slate-800">
-                      50:50 Hapus 2 Salah
+                      {lang === "EN"
+                        ? "50:50 Remove 2 Wrong"
+                        : "50:50 Hapus 2 Salah"}
                     </p>
                     <p className="text-xs font-medium text-slate-500">
                       {usedFiftyFifty
-                        ? "Sudah dipakai"
-                        : "Hilangkan 2 target pengecoh"}
+                        ? t("alreadyUsed")
+                        : lang === "EN"
+                          ? "Eliminate 2 decoy targets"
+                          : "Hilangkan 2 target pengecoh"}
                     </p>
                   </div>
                 </button>
@@ -833,12 +1072,14 @@ export default function PlayQuizPage() {
                   </div>
                   <div>
                     <p className="font-extrabold text-sm text-slate-800">
-                      Mode Ratu Super
+                      {t("queenBoostTitle")}
                     </p>
                     <p className="text-xs font-medium text-slate-500">
                       {usedQueenBoost
-                        ? "Sudah dipakai"
-                        : "Bebas meluncur ke segala arah"}
+                        ? t("alreadyUsed")
+                        : lang === "EN"
+                          ? "Slide freely in any direction"
+                          : "Bebas meluncur ke segala arah"}
                     </p>
                   </div>
                 </button>
@@ -857,8 +1098,7 @@ export default function PlayQuizPage() {
 
             <div className="mt-3.5 px-4 py-2.5 rounded-2xl bg-amber-50 border border-amber-200 text-center">
               <p className="text-xs font-bold text-amber-800">
-                💡 Klik titik hijau untuk melangkah, lalu tabrak kotak huruf
-                jawaban yang benar!
+                💡 {t("boardTip")}
               </p>
             </div>
           </div>

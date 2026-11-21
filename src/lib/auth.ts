@@ -34,3 +34,14 @@ export function clearTeacherSession() {
   if (typeof window === "undefined") return;
   localStorage.removeItem(STORAGE_KEY);
 }
+
+export function logoutTeacher() {
+  clearTeacherSession();
+}
+
+const SUPER_ADMIN_USERNAMES = ["fatuh"];
+
+export function isSuperAdmin(session: TeacherSession | null): boolean {
+  if (!session || !session.username) return false;
+  return SUPER_ADMIN_USERNAMES.includes(session.username.trim().toLowerCase());
+}
