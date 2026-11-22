@@ -23,6 +23,7 @@ import {
   Subscript,
   Check,
   RotateCcw,
+  Info,
 } from "lucide-react";
 import {
   QuestionData,
@@ -64,6 +65,22 @@ const PIECE_LIST: PieceType[] = [
   "KING",
   "PAWN",
 ];
+
+const PIECE_ALIASES: Record<string, PieceType> = {
+  KNIGHT: "KNIGHT",
+  KUDA: "KNIGHT",
+  BISHOP: "BISHOP",
+  GAJAH: "BISHOP",
+  ROOK: "ROOK",
+  BENTENG: "ROOK",
+  QUEEN: "QUEEN",
+  RATU: "QUEEN",
+  MENTERI: "QUEEN",
+  KING: "KING",
+  RAJA: "KING",
+  PAWN: "PAWN",
+  PION: "PAWN",
+};
 
 const MATH_SYMBOLS = [
   "×",
@@ -131,6 +148,7 @@ export default function CreateQuizPage() {
   const [previewMode, setPreviewMode] = useState<ConcreteGameMode>("CHESS");
   const [previewResetNonce, setPreviewResetNonce] = useState<number>(0);
   const [saving, setSaving] = useState(false);
+  const [showCsvGuide, setShowCsvGuide] = useState(false);
 
   // State toolbar format & simbol matematika
   const [openSymbolCardId, setOpenSymbolCardId] = useState<string | null>(null);
@@ -321,15 +339,21 @@ export default function CreateQuizPage() {
         ? [
             '"What is the SI unit of force?","Joule","Newton","Watt","Pascal","B","KNIGHT",3,60',
             '"Which planet is known as the Red Planet?","Venus","Mars","Jupiter","Saturn","B","BISHOP",3,60',
-            '"[Multiple Answer] Which of the following are prime numbers?","2","4","7","9","A;C","QUEEN",4,60',
+            '"Which programming language runs natively in a web browser?","JavaScript","Python","C++","Go","A","ROOK",4,60',
+            '"Which of the following are prime numbers?","2","4","7","9","A;C","QUEEN",4,90',
+            '"Which chemical element has the symbol Au?","Silver","Aluminum","Gold","Copper","C","KING",2,45',
+            '"In which country is Borobudur Temple located?","Thailand","Cambodia","Vietnam","Indonesia","D","PAWN",0,60',
           ]
         : [
             '"Apa satuan SI untuk gaya?","Joule","Newton","Watt","Pascal","B","KNIGHT",3,60',
             '"Planet manakah yang dijuluki sebagai Planet Merah?","Venus","Mars","Jupiter","Saturnus","B","BISHOP",3,60',
-            '"[Jawaban Ganda] Manakah yang termasuk bilangan prima?","2","4","7","9","A;C","QUEEN",4,60',
+            '"Bahasa pemrograman apa yang berjalan langsung di browser web?","JavaScript","Python","C++","Go","A","ROOK",4,60',
+            '"Manakah yang termasuk bilangan prima?","2","4","7","9","A;C","QUEEN",4,90',
+            '"Unsur kimia dengan simbol Au adalah...","Perak","Aluminium","Emas","Tembaga","C","KING",2,45',
+            '"Di negara manakah Candi Borobudur berada?","Thailand","Kamboja","Vietnam","Indonesia","D","PAWN",0,60',
           ];
 
-    const csvContent = [header, ...rows].join("\n");
+    const csvContent = "\uFEFF" + [header, ...rows].join("\n");
 
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -346,7 +370,7 @@ export default function CreateQuizPage() {
 
     const reader = new FileReader();
     reader.onload = () => {
-      const text = String(reader.result || "");
+      const text = String(reader.result || "").replace(/^\uFEFF/, "");
       const lines = text
         .split(/\r?\n/)
         .map((l) => l.trim())
@@ -361,25 +385,46 @@ export default function CreateQuizPage() {
         return;
       }
 
+      // Deteksi otomatis pemisah kolom koma (,) atau titik koma (;) dari Excel
+      const headerLine = lines[0];
+      const delimiter =
+        headerLine.includes(";") && !headerLine.includes(",") ? ";" : ",";
+      const splitRegex =
+        delimiter === ";"
+          ? /;(?=(?:(?:[^"]*"){2})*[^"]*$)/
+          : /,(?=(?:(?:[^"]*"){2})*[^"]*$)/;
+
       const imported: DraftQuestion[] = [];
       for (let i = 1; i < lines.length; i++) {
         const cols = lines[i]
-          .split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/)
+          .split(splitRegex)
           .map((c) => c.replace(/^"|"$/g, "").replace(/""/g, '"').trim());
 
         if (cols.length < 6) continue;
         const rawCorrect = (cols[5] || "A").toUpperCase();
-        const validKeys = rawCorrect
-          .split(/[;|,]/)
-          .map((k) => k.trim())
-          .filter((k): k is OptionKey => ["A", "B", "C", "D"].includes(k));
+        const validKeys = Array.from(
+          new Set(
+            rawCorrect
+              .split(/[;|,]/)
+              .map((k) => k.trim())
+              .filter((k): k is OptionKey => ["A", "B", "C", "D"].includes(k)),
+          ),
+        );
 
-        const pieceRaw = (cols[6] || "KNIGHT").toUpperCase() as PieceType;
-        const piece: PieceType = PIECE_LIST.includes(pieceRaw)
-          ? pieceRaw
-          : "KNIGHT";
-        const obs = Math.min(5, Math.max(0, Number(cols[7]) || 3));
-        const tLimit = Math.max(15, Number(cols[8]) || 60);
+        const pieceRaw = (cols[6] || "KNIGHT").trim().toUpperCase();
+        const piece: PieceType = PIECE_ALIASES[pieceRaw] || "KNIGHT";
+
+        const parsedObs = Number(cols[7]);
+        const obs =
+          cols[7] !== undefined && cols[7] !== "" && Number.isFinite(parsedObs)
+            ? Math.min(5, Math.max(0, Math.round(parsedObs)))
+            : 3;
+
+        const parsedTime = Number(cols[8]);
+        const tLimit =
+          Number.isFinite(parsedTime) && parsedTime >= 15
+            ? Math.round(parsedTime)
+            : 60;
 
         imported.push({
           localId: `${Date.now()}-${i}-${Math.random().toString(36).slice(2, 6)}`,
@@ -749,7 +794,20 @@ export default function CreateQuizPage() {
             </button>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowCsvGuide((prev) => !prev)}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border-2 font-extrabold text-xs transition cursor-pointer ${
+                showCsvGuide
+                  ? "bg-amber-100 border-amber-400 text-amber-900"
+                  : "bg-white hover:bg-amber-50 border-slate-200 text-slate-700"
+              }`}
+            >
+              <Info className="w-3.5 h-3.5 text-amber-600" />
+              <span>{lang === "EN" ? "CSV Guide" : "Panduan CSV"}</span>
+            </button>
+
             <button
               type="button"
               onClick={handleDownloadCsvTemplate}
@@ -776,6 +834,66 @@ export default function CreateQuizPage() {
             </button>
           </div>
         </div>
+
+        {/* Panel Panduan Format CSV & Daftar piece_type */}
+        {showCsvGuide && (
+          <div className="bg-white p-5 rounded-[24px] border-2 border-amber-300 shadow-xs flex flex-col gap-3">
+            <div className="flex items-center justify-between">
+              <p className="font-black text-sm text-slate-800">
+                {lang === "EN"
+                  ? "CSV Column Reference (Default Board: TactiChess)"
+                  : "Panduan Kolom CSV (Papan Default: TactiChess)"}
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowCsvGuide(false)}
+                className="text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
+              <div className="p-3 rounded-xl bg-[#F8FBFF] border border-slate-200">
+                <p className="font-black text-slate-700 mb-1">
+                  1. question_text & option_a..d
+                </p>
+                <p className="text-slate-500 font-semibold leading-snug">
+                  {lang === "EN"
+                    ? "Required text for question & options A, B, C, D."
+                    : "Wajib diisi teks pertanyaan dan keempat opsi A, B, C, D."}
+                </p>
+              </div>
+              <div className="p-3 rounded-xl bg-[#F8FBFF] border border-slate-200">
+                <p className="font-black text-slate-700 mb-1">
+                  2. correct_option
+                </p>
+                <p className="text-slate-500 font-semibold leading-snug">
+                  {lang === "EN"
+                    ? 'Single: "A"–"D". Multiple Answers: separate with ";" (e.g. "A;C").'
+                    : 'Tunggal: "A"–"D". Jawaban Ganda: pisahkan dengan ";" (contoh: "A;C").'}
+                </p>
+              </div>
+              <div className="p-3 rounded-xl bg-amber-50/70 border border-amber-200">
+                <p className="font-black text-amber-900 mb-1">
+                  3. piece_type (Default: KNIGHT)
+                </p>
+                <p className="text-amber-800 font-bold leading-snug">
+                  KNIGHT, BISHOP, ROOK, QUEEN, KING, PAWN
+                </p>
+              </div>
+              <div className="p-3 rounded-xl bg-[#F8FBFF] border border-slate-200">
+                <p className="font-black text-slate-700 mb-1">
+                  4. obstacles & time_limit
+                </p>
+                <p className="text-slate-500 font-semibold leading-snug">
+                  {lang === "EN"
+                    ? "obstacles: 0–5 (default 3). time_limit: seconds >= 15 (default 60)."
+                    : "obstacles: 0–5 (default 3). time_limit: detik >= 15 (default 60)."}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Grid 2 Kolom: Editor Soal (Kiri) + Live Preview (Kanan) */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">

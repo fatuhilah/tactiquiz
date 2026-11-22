@@ -1,6 +1,12 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useRef } from "react";
+import React, {
+  useEffect,
+  useState,
+  useCallback,
+  useRef,
+  useMemo,
+} from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
@@ -32,6 +38,10 @@ import {
   VolumeX,
   ShieldAlert,
   SlidersHorizontal,
+  QrCode,
+  Shuffle,
+  Maximize2,
+  X,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { getTeacherSession, TeacherSession } from "@/lib/auth";
@@ -52,11 +62,26 @@ import {
   OptionKey,
   OPTION_STYLES,
 } from "@/components/ChessQuizBoard";
-import GameModeSelector from "@/components/GameModeSelector";
 import FormattedText from "@/components/FormattedText";
 import { useLanguage } from "@/components/LanguageProvider";
 import { PIECE_META_I18N } from "@/lib/i18n";
 import { sound } from "@/lib/sound";
+
+type ConcreteGameMode =
+  | "CHESS"
+  | "MIRROR"
+  | "CIRCUIT"
+  | "STEALTH"
+  | "SLIDE"
+  | "COLLAPSE"
+  | "FLUX"
+  | "SWITCH"
+  | "PORTAL"
+  | "SHIFT";
+
+interface ExtendedRoomSessionSettings extends RoomSessionSettings {
+  game_modes?: ConcreteGameMode[];
+}
 
 interface RoomData {
   id: string;
@@ -66,7 +91,7 @@ interface RoomData {
   hosting_mode?: HostingMode;
   current_question_index?: number;
   reveal_answer?: boolean;
-  settings?: RoomSessionSettings;
+  settings?: ExtendedRoomSessionSettings;
 }
 
 interface QuestionRow {
@@ -107,6 +132,440 @@ interface PlayerRow {
   is_finished?: boolean;
   joined_at: string;
 }
+
+const CONCRETE_GAME_MODES: ConcreteGameMode[] = [
+  "CHESS",
+  "MIRROR",
+  "CIRCUIT",
+  "STEALTH",
+  "SLIDE",
+  "COLLAPSE",
+  "FLUX",
+  "SWITCH",
+  "PORTAL",
+  "SHIFT",
+];
+
+const CONCRETE_MODE_SET = new Set<string>(CONCRETE_GAME_MODES);
+
+function extractSelectedModes(
+  rawSettings: unknown,
+  parsedBase: RoomSessionSettings,
+): ConcreteGameMode[] {
+  if (rawSettings && typeof rawSettings === "object") {
+    const rawObj = rawSettings as Record<string, unknown>;
+    if (Array.isArray(rawObj.game_modes)) {
+      const valid = rawObj.game_modes
+        .map((m) => String(m).trim().toUpperCase())
+        .filter((m): m is ConcreteGameMode => CONCRETE_MODE_SET.has(m));
+      return Array.from(new Set(valid));
+    }
+  }
+
+  const singleUpper = String(parsedBase.game_mode || "")
+    .trim()
+    .toUpperCase();
+  if (CONCRETE_MODE_SET.has(singleUpper)) {
+    return [singleUpper as ConcreteGameMode];
+  }
+
+  return [];
+}
+
+function resolveHostQuestionGameMode(
+  settings: ExtendedRoomSessionSettings,
+  questionId: string,
+): ConcreteGameMode {
+  const modes = Array.isArray(settings.game_modes)
+    ? settings.game_modes.filter((m): m is ConcreteGameMode =>
+        CONCRETE_MODE_SET.has(m),
+      )
+    : [];
+
+  if (modes.length === 1) {
+    return modes[0];
+  }
+
+  if (modes.length > 1) {
+    let hash = 0;
+    const str = String(questionId);
+    for (let i = 0; i < str.length; i++) {
+      hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+    }
+    return modes[hash % modes.length];
+  }
+
+  const resolved = resolveConcreteGameMode(settings.game_mode, questionId);
+  return CONCRETE_MODE_SET.has(resolved)
+    ? (resolved as ConcreteGameMode)
+    : "CHESS";
+}
+
+// ==================== ZERO-DEPENDENCY ISO/IEC 18004 QR CODE SVG ====================
+
+const QR_GF_EXP = new Uint8Array(512);
+const QR_GF_LOG = new Uint8Array(256);
+(() => {
+  let x = 1;
+  for (let i = 0; i < 255; i++) {
+    QR_GF_EXP[i] = x;
+    QR_GF_LOG[x] = i;
+    x <<= 1;
+    if (x & 0x100) x ^= 0x11d;
+  }
+  for (let i = 255; i < 512; i++) {
+    QR_GF_EXP[i] = QR_GF_EXP[i - 255];
+  }
+})();
+
+function qrGfMul(a: number, b: number): number {
+  if (a === 0 || b === 0) return 0;
+  return QR_GF_EXP[QR_GF_LOG[a] + QR_GF_LOG[b]];
+}
+
+function qrRsEncode(data: number[], nsym: number): number[] {
+  let gen = [1];
+  for (let i = 0; i < nsym; i++) {
+    const nextGen = new Array<number>(gen.length + 1).fill(0);
+    for (let j = 0; j < gen.length; j++) {
+      nextGen[j] ^= gen[j];
+      nextGen[j + 1] ^= qrGfMul(gen[j], QR_GF_EXP[i]);
+    }
+    gen = nextGen;
+  }
+
+  const res = [...data, ...new Array<number>(nsym).fill(0)];
+  for (let i = 0; i < data.length; i++) {
+    const coef = res[i];
+    if (coef !== 0) {
+      for (let j = 1; j < gen.length; j++) {
+        res[i + j] ^= qrGfMul(gen[j], coef);
+      }
+    }
+  }
+  return res.slice(data.length);
+}
+
+const QR_SPECS: {
+  size: number;
+  dataCw: number;
+  ecCw: number;
+  align: number[];
+}[] = [
+  { size: 21, dataCw: 19, ecCw: 7, align: [] },
+  { size: 25, dataCw: 34, ecCw: 10, align: [6, 18] },
+  { size: 29, dataCw: 55, ecCw: 15, align: [6, 22] },
+  { size: 33, dataCw: 80, ecCw: 20, align: [6, 26] },
+  { size: 37, dataCw: 108, ecCw: 26, align: [6, 30] },
+];
+
+function buildQrMatrix(text: string): boolean[][] {
+  const encoder = new TextEncoder();
+  let raw = Array.from(encoder.encode(text));
+
+  let spec = QR_SPECS[QR_SPECS.length - 1];
+  for (const s of QR_SPECS) {
+    if (raw.length + 2 <= s.dataCw) {
+      spec = s;
+      break;
+    }
+  }
+  if (raw.length + 2 > spec.dataCw) {
+    raw = raw.slice(0, spec.dataCw - 2);
+  }
+
+  const { size, dataCw, ecCw, align } = spec;
+  const bits: number[] = [];
+  const pushBits = (val: number, len: number) => {
+    for (let b = len - 1; b >= 0; b--) {
+      bits.push((val >> b) & 1);
+    }
+  };
+
+  pushBits(0b0100, 4);
+  pushBits(raw.length, 8);
+  for (const byte of raw) pushBits(byte, 8);
+  pushBits(0, Math.min(4, dataCw * 8 - bits.length));
+  while (bits.length % 8 !== 0) bits.push(0);
+
+  const codewords: number[] = [];
+  for (let i = 0; i < bits.length; i += 8) {
+    let val = 0;
+    for (let b = 0; b < 8; b++) val = (val << 1) | bits[i + b];
+    codewords.push(val);
+  }
+
+  const padBytes = [0xec, 0x11];
+  let padIdx = 0;
+  while (codewords.length < dataCw) {
+    codewords.push(padBytes[padIdx % 2]);
+    padIdx++;
+  }
+
+  const ec = qrRsEncode(codewords, ecCw);
+  const allCw = [...codewords, ...ec];
+  const allBits: number[] = [];
+  for (const cw of allCw) {
+    for (let b = 7; b >= 0; b--) allBits.push((cw >> b) & 1);
+  }
+
+  const mat: boolean[][] = Array.from({ length: size }, () =>
+    new Array<boolean>(size).fill(false),
+  );
+  const func: boolean[][] = Array.from({ length: size }, () =>
+    new Array<boolean>(size).fill(false),
+  );
+
+  const setFunc = (r: number, c: number, val: boolean) => {
+    if (r >= 0 && r < size && c >= 0 && c < size) {
+      mat[r][c] = val;
+      func[r][c] = true;
+    }
+  };
+
+  for (const [fr, fc] of [
+    [0, 0],
+    [0, size - 7],
+    [size - 7, 0],
+  ]) {
+    for (let dr = -1; dr <= 7; dr++) {
+      for (let dc = -1; dc <= 7; dc++) {
+        const r = fr + dr;
+        const c = fc + dc;
+        if (r >= 0 && r < size && c >= 0 && c < size) {
+          const inOuter = dr >= 0 && dr <= 6 && dc >= 0 && dc <= 6;
+          const onBorder = dr === 0 || dr === 6 || dc === 0 || dc === 6;
+          const inInner = dr >= 2 && dr <= 4 && dc >= 2 && dc <= 4;
+          setFunc(r, c, inOuter && (onBorder || inInner));
+        }
+      }
+    }
+  }
+
+  for (const ar of align) {
+    for (const ac of align) {
+      if (func[ar][ac]) continue;
+      for (let dr = -2; dr <= 2; dr++) {
+        for (let dc = -2; dc <= 2; dc++) {
+          setFunc(ar + dr, ac + dc, Math.max(Math.abs(dr), Math.abs(dc)) !== 1);
+        }
+      }
+    }
+  }
+
+  for (let i = 8; i < size - 8; i++) {
+    setFunc(6, i, i % 2 === 0);
+    setFunc(i, 6, i % 2 === 0);
+  }
+
+  setFunc(size - 8, 8, true);
+  for (let i = 0; i < 9; i++) {
+    if (!func[8][i]) setFunc(8, i, false);
+    if (!func[i][8]) setFunc(i, 8, false);
+  }
+  for (let i = 0; i < 8; i++) {
+    if (!func[8][size - 1 - i]) setFunc(8, size - 1 - i, false);
+    if (!func[size - 1 - i][8]) setFunc(size - 1 - i, 8, false);
+  }
+
+  let bitIdx = 0;
+  let upward = true;
+  let col = size - 1;
+  while (col > 0) {
+    if (col === 6) col--;
+    for (let step = 0; step < size; step++) {
+      const r = upward ? size - 1 - step : step;
+      for (const dc of [0, -1]) {
+        const c = col + dc;
+        if (!func[r][c]) {
+          let bit = bitIdx < allBits.length ? allBits[bitIdx] : 0;
+          bitIdx++;
+          if ((r + c) % 2 === 0) bit ^= 1;
+          mat[r][c] = bit === 1;
+        }
+      }
+    }
+    upward = !upward;
+    col -= 2;
+  }
+
+  const fmt = 0x77c4; // EC Level L + Mask 0
+  const fmtBits = Array.from({ length: 15 }, (_, i) => (fmt >> (14 - i)) & 1);
+  const coords1: [number, number][] = [
+    [8, 0],
+    [8, 1],
+    [8, 2],
+    [8, 3],
+    [8, 4],
+    [8, 5],
+    [8, 7],
+    [8, 8],
+    [7, 8],
+    [5, 8],
+    [4, 8],
+    [3, 8],
+    [2, 8],
+    [1, 8],
+    [0, 8],
+  ];
+  coords1.forEach(([r, c], i) => {
+    mat[r][c] = fmtBits[i] === 1;
+  });
+  for (let i = 0; i < 7; i++) {
+    mat[size - 1 - i][8] = fmtBits[i] === 1;
+  }
+  for (let i = 0; i < 8; i++) {
+    mat[8][size - 8 + i] = fmtBits[7 + i] === 1;
+  }
+
+  return mat;
+}
+
+function JoinQrSvg({
+  value,
+  className = "w-44 h-44",
+}: {
+  value: string;
+  className?: string;
+}) {
+  const matrix = useMemo(() => buildQrMatrix(value), [value]);
+  const size = matrix.length;
+  const quiet = 3;
+  const total = size + quiet * 2;
+
+  return (
+    <svg
+      viewBox={`0 0 ${total} ${total}`}
+      shapeRendering="crispEdges"
+      className={className}
+      aria-label="QR Code Join Room"
+    >
+      <rect width={total} height={total} fill="#FFFFFF" />
+      {matrix.map((row, r) =>
+        row.map((isDark, c) =>
+          isDark ? (
+            <rect
+              key={`${r}-${c}`}
+              x={c + quiet}
+              y={r + quiet}
+              width={1}
+              height={1}
+              fill="#0F172A"
+            />
+          ) : null,
+        ),
+      )}
+    </svg>
+  );
+}
+
+// ==================== MULTI-MODE SELECTOR COMPONENT ====================
+
+function MultiGameModeSelector({
+  selectedModes,
+  onChange,
+  lang,
+}: {
+  selectedModes: ConcreteGameMode[];
+  onChange: (nextModes: ConcreteGameMode[]) => void;
+  lang: string;
+}) {
+  const isRandomAll = selectedModes.length === 0;
+
+  const handleToggleMode = (mode: ConcreteGameMode) => {
+    if (selectedModes.includes(mode)) {
+      onChange(selectedModes.filter((m) => m !== mode));
+    } else {
+      onChange([...selectedModes, mode]);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-3.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="text-base sm:text-lg font-black text-slate-800 flex items-center gap-2">
+            <span>🎮</span>
+            <span>
+              {lang === "EN"
+                ? "Arena Game Modes (Multi-Select)"
+                : "Mode Permainan Arena (Bisa Pilih Lebih dari 1)"}
+            </span>
+          </h3>
+          <p className="text-xs font-semibold text-slate-500 mt-0.5">
+            {isRandomAll
+              ? lang === "EN"
+                ? "No specific mode selected — questions will randomly cycle through all 10 modes."
+                : "Tidak ada mode dipilih — setiap soal otomatis diacak dari seluruh 10 mode."
+              : selectedModes.length === 1
+                ? lang === "EN"
+                  ? `1 mode active (${GAME_MODES_META[selectedModes[0]]?.name}). Click others to combine!`
+                  : `1 mode aktif (${GAME_MODES_META[selectedModes[0]]?.name}). Klik mode lain untuk menggabungkan!`
+                : lang === "EN"
+                  ? `${selectedModes.length} modes selected — questions will randomize among your chosen modes.`
+                  : `${selectedModes.length} mode dipilih — soal akan diacak hanya dari mode yang dipilih.`}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => onChange([])}
+          className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-black border-2 transition cursor-pointer shrink-0 ${
+            isRandomAll
+              ? "bg-indigo-600 border-indigo-700 text-white shadow-xs"
+              : "bg-slate-50 hover:bg-indigo-50 border-slate-200 text-slate-700"
+          }`}
+        >
+          <Shuffle className="w-3.5 h-3.5" />
+          <span>{lang === "EN" ? "Random All (Default)" : "Acak Semua"}</span>
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+        {CONCRETE_GAME_MODES.map((mode) => {
+          const meta = GAME_MODES_META[mode];
+          const isChecked = selectedModes.includes(mode);
+
+          return (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => handleToggleMode(mode)}
+              className={`relative p-3 rounded-2xl border-2 border-b-4 text-left transition flex flex-col justify-between gap-2 cursor-pointer active:translate-y-0.5 ${
+                isChecked
+                  ? "bg-sky-50 border-[#2B90FF] ring-2 ring-[#2B90FF]/20 shadow-xs"
+                  : "bg-[#F8FBFF] hover:bg-white border-slate-200/90 text-slate-700"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-1">
+                <span className="text-xl leading-none">{meta?.emoji}</span>
+                <span
+                  className={`w-5 h-5 rounded-lg flex items-center justify-center border text-[10px] font-black transition ${
+                    isChecked
+                      ? "bg-[#2B90FF] border-[#1D7AFC] text-white"
+                      : "bg-white border-slate-300 text-transparent"
+                  }`}
+                >
+                  <Check className="w-3 h-3" />
+                </span>
+              </div>
+
+              <span
+                className={`text-xs font-black leading-tight ${
+                  isChecked ? "text-[#1D7AFC]" : "text-slate-700"
+                }`}
+              >
+                {meta?.name || mode}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ==================== HELPER FUNCTIONS ====================
 
 function parsePlayerAnswers(raw: unknown): StoredAnswer[] {
   if (!raw) return [];
@@ -150,14 +609,18 @@ export default function HostRoomPage() {
 
   const [teacher, setTeacher] = useState<TeacherSession | null>(null);
   const [room, setRoom] = useState<RoomData | null>(null);
-  const [sessionSettings, setSessionSettings] = useState<RoomSessionSettings>({
-    ...DEFAULT_SESSION_SETTINGS,
-  });
+  const [sessionSettings, setSessionSettings] =
+    useState<ExtendedRoomSessionSettings>({
+      ...DEFAULT_SESSION_SETTINGS,
+      game_modes: [],
+    });
   const [quizTitle, setQuizTitle] = useState("");
   const [questions, setQuestions] = useState<QuestionRow[]>([]);
   const [players, setPlayers] = useState<PlayerRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [showQrCode, setShowQrCode] = useState(false);
+  const [showQrModal, setShowQrModal] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [showLiveModeDrawer, setShowLiveModeDrawer] = useState(false);
 
@@ -180,6 +643,15 @@ export default function HostRoomPage() {
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const lastTickSecondRef = useRef<number | null>(null);
 
+  const applyParsedSettings = useCallback((rawSettings: unknown) => {
+    const base = parseSessionSettings(rawSettings);
+    const modes = extractSelectedModes(rawSettings, base);
+    setSessionSettings({
+      ...base,
+      game_modes: modes,
+    });
+  }, []);
+
   const fetchPlayers = useCallback(async (roomId: string) => {
     const { data } = await supabase
       .from("players")
@@ -191,32 +663,35 @@ export default function HostRoomPage() {
     if (data) setPlayers(data as PlayerRow[]);
   }, []);
 
-  const syncRoom = useCallback(async (roomId: string) => {
-    const { data } = await supabase
-      .from("rooms")
-      .select(
-        "id, pin_code, quiz_id, status, hosting_mode, current_question_index, reveal_answer, settings",
-      )
-      .eq("id", roomId)
-      .single();
+  const syncRoom = useCallback(
+    async (roomId: string) => {
+      const { data } = await supabase
+        .from("rooms")
+        .select(
+          "id, pin_code, quiz_id, status, hosting_mode, current_question_index, reveal_answer, settings",
+        )
+        .eq("id", roomId)
+        .single();
 
-    if (data) {
-      const typed = data as RoomData;
-      setSessionSettings(parseSessionSettings(typed.settings));
-      setRoom((prev) => {
-        if (
-          prev &&
-          prev.status === typed.status &&
-          prev.current_question_index === typed.current_question_index &&
-          prev.reveal_answer === typed.reveal_answer &&
-          prev.hosting_mode === typed.hosting_mode
-        ) {
-          return prev;
-        }
-        return typed;
-      });
-    }
-  }, []);
+      if (data) {
+        const typed = data as RoomData;
+        applyParsedSettings(typed.settings);
+        setRoom((prev) => {
+          if (
+            prev &&
+            prev.status === typed.status &&
+            prev.current_question_index === typed.current_question_index &&
+            prev.reveal_answer === typed.reveal_answer &&
+            prev.hosting_mode === typed.hosting_mode
+          ) {
+            return prev;
+          }
+          return typed;
+        });
+      }
+    },
+    [applyParsedSettings],
+  );
 
   useEffect(() => {
     async function initHost() {
@@ -265,11 +740,10 @@ export default function HostRoomPage() {
 
       const typedRoom = roomData as RoomData;
       const typedQuestions = (qList || []) as QuestionRow[];
-      const parsedSettings = parseSessionSettings(typedRoom.settings);
 
       setTeacher(session);
       setRoom(typedRoom);
-      setSessionSettings(parsedSettings);
+      applyParsedSettings(typedRoom.settings);
       setQuizTitle(quiz.title);
       setQuestions(typedQuestions);
 
@@ -291,7 +765,7 @@ export default function HostRoomPage() {
 
     initHost();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pin, router, fetchPlayers]);
+  }, [pin, router, fetchPlayers, applyParsedSettings]);
 
   useEffect(() => {
     if (!room?.id || !teacher) return;
@@ -321,7 +795,7 @@ export default function HostRoomPage() {
         (payload) => {
           const updated = payload.new as RoomData;
           setRoom(updated);
-          setSessionSettings(parseSessionSettings(updated.settings));
+          applyParsedSettings(updated.settings);
         },
       )
       .subscribe();
@@ -335,15 +809,21 @@ export default function HostRoomPage() {
       supabase.removeChannel(channel);
       clearInterval(interval);
     };
-  }, [room?.id, teacher, fetchPlayers, syncRoom]);
+  }, [room?.id, teacher, fetchPlayers, syncRoom, applyParsedSettings]);
 
-  const handleChangeGameMode = async (nextMode: TactiGameMode) => {
-    if (!room || sessionSettings.game_mode === nextMode) return;
+  const handleChangeSelectedModes = async (nextModes: ConcreteGameMode[]) => {
+    if (!room) return;
     sound.playMove();
-    const nextSettings: RoomSessionSettings = {
+
+    const primaryGameMode: TactiGameMode =
+      nextModes.length === 1 ? nextModes[0] : ("MIX" as TactiGameMode);
+
+    const nextSettings: ExtendedRoomSessionSettings = {
       ...sessionSettings,
-      game_mode: nextMode,
+      game_mode: primaryGameMode,
+      game_modes: nextModes,
     };
+
     setSessionSettings(nextSettings);
     setRoom((prev) => (prev ? { ...prev, settings: nextSettings } : prev));
 
@@ -520,8 +1000,12 @@ export default function HostRoomPage() {
     completeCurrentTeacherLedRound,
   ]);
 
+  const joinUrl =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/join/${room?.pin_code || pin}`
+      : `/join/${room?.pin_code || pin}`;
+
   const handleCopyPin = () => {
-    const joinUrl = `${window.location.origin}/join/${pin}`;
     navigator.clipboard.writeText(joinUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -646,7 +1130,29 @@ export default function HostRoomPage() {
   const allStudentsFinished =
     players.length > 0 && finishedCount === players.length;
 
-  const selectedModeMeta = GAME_MODES_META[sessionSettings.game_mode];
+  const activeModesList = sessionSettings.game_modes || [];
+  const headerModeSummary =
+    activeModesList.length === 0
+      ? {
+          emoji: "🎲",
+          label: lang === "EN" ? "Random All (10 Modes)" : "Mode Acak (Semua)",
+        }
+      : activeModesList.length === 1
+        ? {
+            emoji: GAME_MODES_META[activeModesList[0]]?.emoji || "♞",
+            label:
+              GAME_MODES_META[activeModesList[0]]?.name || activeModesList[0],
+          }
+        : {
+            emoji: activeModesList
+              .slice(0, 3)
+              .map((m) => GAME_MODES_META[m]?.emoji || "🎮")
+              .join(""),
+            label:
+              lang === "EN"
+                ? `${activeModesList.length} Modes Mix`
+                : `Acak ${activeModesList.length} Mode`,
+          };
 
   // ==================== LAYAR SOAL SHARE SCREEN (TEACHER-LED) ====================
   const renderTeacherLedStage = () => {
@@ -666,8 +1172,8 @@ export default function HostRoomPage() {
         ? currentQ.correct_options
         : [currentQ.correct_option];
 
-    const activeConcreteMode = resolveConcreteGameMode(
-      sessionSettings.game_mode,
+    const activeConcreteMode = resolveHostQuestionGameMode(
+      sessionSettings,
       currentQ.id,
     );
     const activeConcreteMeta = GAME_MODES_META[activeConcreteMode];
@@ -701,7 +1207,7 @@ export default function HostRoomPage() {
             </span>
 
             <span className="px-3 py-1.5 rounded-xl bg-sky-100 text-sky-800 text-xs font-black">
-              {activeConcreteMeta.emoji} {activeConcreteMeta.name}
+              {activeConcreteMeta?.emoji} {activeConcreteMeta?.name}
             </span>
 
             {activeConcreteMode === "CHESS" && (
@@ -718,7 +1224,6 @@ export default function HostRoomPage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            {/* Timer Hitung Mundur Soal */}
             {sessionSettings.question_timer && !room.reveal_answer && (
               <div
                 className={`flex items-center gap-2.5 px-4 py-2 rounded-2xl border-2 font-black text-sm ${
@@ -742,7 +1247,6 @@ export default function HostRoomPage() {
               </div>
             )}
 
-            {/* Counter Siswa yang Sudah Menjawab */}
             <div className="flex items-center gap-2 px-4 py-2 rounded-2xl bg-emerald-50 border-2 border-emerald-200 text-emerald-700 font-black text-xs sm:text-sm">
               <Users className="w-4 h-4" />
               <span>
@@ -897,7 +1401,6 @@ export default function HostRoomPage() {
 
     return (
       <div className="flex flex-col gap-5">
-        {/* Banner Kunci Jawaban + Tombol Next Question saat babak soal Teacher-Led selesai */}
         {currentRoundQ && roundOptsMap && (
           <div className="bg-white p-5 sm:p-6 rounded-[28px] border-2 border-emerald-300 border-b-[6px] shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
@@ -1274,7 +1777,7 @@ export default function HostRoomPage() {
     );
   };
 
-  // ==================== PANEL TAB 2: ANALISIS PER SOAL (STUDENT-PACED & POST-GAME) ====================
+  // ==================== PANEL TAB 2: ANALISIS PER SOAL ====================
   const renderQuestionsAnalyticsPanel = () => {
     const inspectedQuestion = questions[selectedQuestionIdx] || questions[0];
     if (!inspectedQuestion) return null;
@@ -1292,8 +1795,8 @@ export default function HostRoomPage() {
         ? inspectedQuestion.correct_options
         : [inspectedQuestion.correct_option];
 
-    const inspectedConcreteMode = resolveConcreteGameMode(
-      sessionSettings.game_mode,
+    const inspectedConcreteMode = resolveHostQuestionGameMode(
+      sessionSettings,
       inspectedQuestion.id,
     );
     const inspectedModeMeta = GAME_MODES_META[inspectedConcreteMode];
@@ -1516,7 +2019,7 @@ export default function HostRoomPage() {
                 : `Soal #${selectedQuestionIdx + 1}`}
             </span>
             <span className="px-3 py-1 rounded-xl bg-sky-100 text-sky-800 text-xs font-black">
-              {inspectedModeMeta.emoji} {inspectedModeMeta.name}
+              {inspectedModeMeta?.emoji} {inspectedModeMeta?.name}
             </span>
             {inspectedConcreteMode === "CHESS" && (
               <span className="px-3 py-1 rounded-xl bg-amber-100 text-amber-800 text-xs font-extrabold">
@@ -1710,11 +2213,56 @@ export default function HostRoomPage() {
 
   return (
     <main className="min-h-screen bg-[#F2F7FC] text-slate-800 pb-12">
+      {/* Modal Perbesar QR Code Proyektor */}
+      <AnimatePresence>
+        {showQrModal && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setShowQrModal(false)}
+            className="fixed inset-0 z-50 bg-slate-950/75 backdrop-blur-xs flex items-center justify-center p-4"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white rounded-[32px] p-6 sm:p-8 max-w-sm w-full text-center shadow-2xl border-4 border-sky-200 relative"
+            >
+              <button
+                type="button"
+                onClick={() => setShowQrModal(false)}
+                className="absolute top-4 right-4 w-9 h-9 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center cursor-pointer"
+                title="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <p className="text-xs font-black uppercase tracking-wider text-sky-600 mb-1">
+                {lang === "EN" ? "Scan to Join Quiz" : "Scan untuk Bergabung"}
+              </p>
+              <h3 className="text-2xl font-black text-slate-800 mb-4">
+                PIN: <span className="text-[#1D7AFC]">{room.pin_code}</span>
+              </h3>
+
+              <div className="p-3 rounded-3xl bg-white border-2 border-slate-200 inline-block shadow-inner">
+                <JoinQrSvg value={joinUrl} className="w-60 h-60" />
+              </div>
+
+              <p className="text-[11px] font-bold text-slate-400 break-all mt-3">
+                {joinUrl}
+              </p>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <header className="bg-white border-b-2 border-slate-200/80 sticky top-0 z-20">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 h-20 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#3B9EFF] to-[#1D7AFC] text-white flex items-center justify-center text-2xl shadow-sm border-b-4 border-[#135BC4] shrink-0">
-              {selectedModeMeta.emoji}
+              {headerModeSummary.emoji}
             </div>
             <div className="min-w-0">
               <span className="font-black text-xl tracking-tight text-slate-800 block leading-none">
@@ -1729,8 +2277,8 @@ export default function HostRoomPage() {
           <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
             {/* Badge Mode Arena Aktif */}
             <span className="hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-2xl bg-indigo-50 border-2 border-indigo-200 text-indigo-800 font-black text-xs">
-              <span>{selectedModeMeta.emoji}</span>
-              <span>{selectedModeMeta.name}</span>
+              <span>{headerModeSummary.emoji}</span>
+              <span>{headerModeSummary.label}</span>
             </span>
 
             {/* Tombol Mute / Unmute Audio */}
@@ -1825,26 +2373,81 @@ export default function HostRoomPage() {
                 </span>
               </div>
 
-              <button
-                type="button"
-                onClick={handleCopyPin}
-                className="w-full py-3 rounded-2xl bg-white/20 hover:bg-white/30 text-white font-extrabold text-sm flex items-center justify-center gap-2 transition mb-4 cursor-pointer"
-              >
-                {copied ? (
-                  <Check className="w-4 h-4" />
-                ) : (
-                  <Copy className="w-4 h-4" />
+              {/* Tombol Salin Link + Tombol Toggle QR Code */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 mb-4">
+                <button
+                  type="button"
+                  onClick={handleCopyPin}
+                  className="py-3 px-3 rounded-2xl bg-white/20 hover:bg-white/30 text-white font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2 transition cursor-pointer"
+                >
+                  {copied ? (
+                    <Check className="w-4 h-4 shrink-0" />
+                  ) : (
+                    <Copy className="w-4 h-4 shrink-0" />
+                  )}
+                  <span>
+                    {copied
+                      ? lang === "EN"
+                        ? "Link Copied!"
+                        : "Tersalin!"
+                      : lang === "EN"
+                        ? "Copy Join Link"
+                        : "Salin Link Join"}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowQrCode((prev) => !prev)}
+                  className={`py-3 px-3 rounded-2xl font-extrabold text-xs sm:text-sm flex items-center justify-center gap-2 transition cursor-pointer ${
+                    showQrCode
+                      ? "bg-white text-[#1D7AFC] shadow-sm"
+                      : "bg-white/20 hover:bg-white/30 text-white"
+                  }`}
+                >
+                  <QrCode className="w-4 h-4 shrink-0" />
+                  <span>
+                    {showQrCode
+                      ? lang === "EN"
+                        ? "Hide QR Code"
+                        : "Tutup QR Code"
+                      : lang === "EN"
+                        ? "Show QR Code"
+                        : "Tampilkan QR Code"}
+                  </span>
+                </button>
+              </div>
+
+              {/* Panel QR Code (Muncul hanya setelah tombol diklik) */}
+              <AnimatePresence>
+                {showQrCode && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0, scale: 0.95 }}
+                    animate={{ opacity: 1, height: "auto", scale: 1 }}
+                    exit={{ opacity: 0, height: 0, scale: 0.95 }}
+                    className="overflow-hidden mb-4"
+                  >
+                    <div className="p-4 rounded-3xl bg-white text-slate-800 shadow-inner flex flex-col items-center gap-2">
+                      <JoinQrSvg value={joinUrl} className="w-40 h-40" />
+                      <p className="text-[11px] font-bold text-slate-500 break-all">
+                        {joinUrl}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setShowQrModal(true)}
+                        className="inline-flex items-center gap-1 px-3 py-1 rounded-xl bg-sky-50 hover:bg-sky-100 text-[#1D7AFC] text-[11px] font-black transition cursor-pointer"
+                      >
+                        <Maximize2 className="w-3 h-3" />
+                        <span>
+                          {lang === "EN"
+                            ? "Enlarge for Projector"
+                            : "Perbesar QR"}
+                        </span>
+                      </button>
+                    </div>
+                  </motion.div>
                 )}
-                <span>
-                  {copied
-                    ? lang === "EN"
-                      ? "Invite Link Copied!"
-                      : "Link Undangan Tersalin!"
-                    : lang === "EN"
-                      ? "Copy Student Join Link"
-                      : "Salin Link Join Siswa"}
-                </span>
-              </button>
+              </AnimatePresence>
 
               <button
                 type="button"
@@ -1860,11 +2463,12 @@ export default function HostRoomPage() {
             </div>
 
             <div className="lg:col-span-7 flex flex-col gap-6">
-              {/* Pemilih 10 Mode Taktis + Mix Mode di Lobby */}
+              {/* Pemilih Multiple Mode (0 dipilih = Acak Semua) */}
               <div className="bg-white p-6 rounded-[32px] border-2 border-slate-200/90 border-b-[6px]">
-                <GameModeSelector
-                  value={sessionSettings.game_mode}
-                  onChange={handleChangeGameMode}
+                <MultiGameModeSelector
+                  selectedModes={activeModesList}
+                  onChange={handleChangeSelectedModes}
+                  lang={lang}
                 />
               </div>
 
@@ -1892,13 +2496,13 @@ export default function HostRoomPage() {
                     <p className="text-xs font-medium mt-1">
                       {lang === "EN" ? (
                         <>
-                          Share PIN code <strong>{room.pin_code}</strong> with
-                          students to join.
+                          Share PIN code <strong>{room.pin_code}</strong> or
+                          show the QR Code to join.
                         </>
                       ) : (
                         <>
-                          Bagikan kode PIN <strong>{room.pin_code}</strong>{" "}
-                          kepada siswa untuk mulai bergabung.
+                          Bagikan kode PIN <strong>{room.pin_code}</strong> atau
+                          tampilkan QR Code agar siswa bisa bergabung.
                         </>
                       )}
                     </p>
@@ -1963,6 +2567,7 @@ export default function HostRoomPage() {
                   </div>
                 </div>
               )}
+
             {isTeacherLed ? (
               activeTab === "LEADERBOARD" ? (
                 renderLeaderboardPanel()
@@ -2002,7 +2607,7 @@ export default function HostRoomPage() {
                       >
                         <SlidersHorizontal className="w-4 h-4" />
                         <span>
-                          {selectedModeMeta.emoji} {selectedModeMeta.name}
+                          {headerModeSummary.emoji} {headerModeSummary.label}
                         </span>
                       </button>
 
@@ -2037,9 +2642,10 @@ export default function HostRoomPage() {
 
                   {showLiveModeDrawer && (
                     <div className="pt-4 border-t border-slate-100">
-                      <GameModeSelector
-                        value={sessionSettings.game_mode}
-                        onChange={handleChangeGameMode}
+                      <MultiGameModeSelector
+                        selectedModes={activeModesList}
+                        onChange={handleChangeSelectedModes}
+                        lang={lang}
                       />
                     </div>
                   )}
