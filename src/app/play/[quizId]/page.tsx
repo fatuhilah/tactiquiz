@@ -28,22 +28,195 @@ import ChessQuizBoard, {
   PIECE_META,
   OPTION_STYLES,
 } from "@/components/ChessQuizBoard";
+import TactiMirrorBoard from "@/components/boards/TactiMirrorBoard";
+import TactiCircuitBoard from "@/components/boards/TactiCircuitBoard";
+import TactiStealthBoard from "@/components/boards/TactiStealthBoard";
+import TactiSlideBoard from "@/components/boards/TactiSlideBoard";
+import TactiCollapseBoard from "@/components/boards/TactiCollapseBoard";
+import TactiFluxBoard from "@/components/boards/TactiFluxBoard";
+import TactiSwitchBoard from "@/components/boards/TactiSwitchBoard";
+import TactiPortalBoard from "@/components/boards/TactiPortalBoard";
+import TactiShiftBoard from "@/components/boards/TactiShiftBoard";
 import FormattedText from "@/components/FormattedText";
 import { useLanguage } from "@/components/LanguageProvider";
 import { PIECE_META_I18N } from "@/lib/i18n";
 import { supabase } from "@/lib/supabase";
 import { sound } from "@/lib/sound";
 
+export type GameMode =
+  | "CHESS"
+  | "MIRROR"
+  | "CIRCUIT"
+  | "STEALTH"
+  | "SLIDE"
+  | "COLLAPSE"
+  | "FLUX"
+  | "SWITCH"
+  | "PORTAL"
+  | "SHIFT";
+
+export interface ExtendedQuestionData extends QuestionData {
+  game_mode?: GameMode;
+}
+
 interface AnswerRecord {
-  question: QuestionData;
+  question: ExtendedQuestionData;
+  gameMode: GameMode;
   selectedOption: OptionKey | null;
   isCorrect: boolean;
   movesUsed: number;
 }
 
-const DEMO_QUESTIONS: QuestionData[] = [
+const ALL_GAME_MODES: {
+  id: GameMode;
+  label: string;
+  icon: string;
+  tipId: string;
+  tipEn: string;
+}[] = [
+  {
+    id: "CHESS",
+    label: "Chess",
+    icon: "♞",
+    tipId:
+      "Klik petak hijau untuk melangkah & tangkap huruf jawaban yang benar!",
+    tipEn: "Click green squares to move and capture the right option letter!",
+  },
+  {
+    id: "MIRROR",
+    label: "Mirror",
+    icon: "🔦",
+    tipId:
+      "Klik cermin (putar 45°) untuk memantulkan laser ke target, lalu tekan Tembak (Spasi).",
+    tipEn:
+      "Click mirrors (45° steps) to aim the laser at a target, then press Fire (Space).",
+  },
+  {
+    id: "CIRCUIT",
+    label: "Circuit",
+    icon: "⚡",
+    tipId:
+      "Putar ubin kabel untuk menyambungkan listrik dari ⚡ ke terminal jawaban, lalu tekan Alirkan.",
+    tipEn:
+      "Rotate circuit tiles to route power from ⚡ to an option terminal, then deliver power.",
+  },
+  {
+    id: "STEALTH",
+    label: "Stealth",
+    icon: "🥷",
+    tipId:
+      "Gunakan klik, D-Pad, atau WASD/Panah untuk menyelinap menghindari sorotan radar merah.",
+    tipEn:
+      "Use clicks, D-Pad, or WASD/Arrows to sneak past red guard radar beams.",
+  },
+  {
+    id: "SLIDE",
+    label: "Slide",
+    icon: "🥌",
+    tipId:
+      "Meluncur di arena es dan pantulkan ke batu bumper hingga berhenti tepat di huruf jawaban.",
+    tipEn:
+      "Glide across the ice and bank off rocks to stop right on the target option.",
+  },
+  {
+    id: "COLLAPSE",
+    label: "Collapse",
+    icon: "🌉",
+    tipId:
+      "Perhatikan angka ketahanan pijakan (1–2); lantai akan runtuh setelah kamu tinggalkan!",
+    tipEn:
+      "Watch tile durability (1–2); tiles crack and collapse after you step off them!",
+  },
+  {
+    id: "FLUX",
+    label: "Flux",
+    icon: "🧲",
+    tipId:
+      "Tekan F/Spasi untuk membalik polaritas (N+ / S−); kutub sama menolak, kutub beda menarik.",
+    tipEn:
+      "Press F/Space to flip polarity (N+ / S−); like poles repel, opposite poles attract.",
+  },
+  {
+    id: "SWITCH",
+    label: "Switch",
+    icon: "🎛️",
+    tipId:
+      "Injak saklar lantai 🔴 atau 🔵 untuk membuka gerbang laser dengan warna yang sama.",
+    tipEn: "Step on 🔴 or 🔵 floor pads to unlock gates of the matching color.",
+  },
+  {
+    id: "PORTAL",
+    label: "Portal",
+    icon: "🌀",
+    tipId:
+      "Masuki portal α atau β untuk berteleportasi menembus tembok penghalang!",
+    tipEn: "Step onto α or β portals to warp instantly across barrier walls!",
+  },
+  {
+    id: "SHIFT",
+    label: "Shift",
+    icon: "🔀",
+    tipId:
+      "Langkahkan bidak atau tekan panah di tepi papan untuk menggeser baris & kolom.",
+    tipEn:
+      "Step your navigator or press edge arrows to wrap rows & columns around.",
+  },
+];
+
+const GAME_MODE_MAP: Record<GameMode, (typeof ALL_GAME_MODES)[number]> =
+  ALL_GAME_MODES.reduce(
+    (acc, item) => {
+      acc[item.id] = item;
+      return acc;
+    },
+    {} as Record<GameMode, (typeof ALL_GAME_MODES)[number]>,
+  );
+
+function normalizeGameMode(raw: unknown): GameMode {
+  const upper = String(raw || "CHESS")
+    .trim()
+    .toUpperCase() as GameMode;
+  return upper in GAME_MODE_MAP ? upper : "CHESS";
+}
+
+function parseOptionKeysSafe(
+  rawList: unknown,
+  fallbackSingle?: unknown,
+): OptionKey[] {
+  const validSet = new Set<OptionKey>(["A", "B", "C", "D"]);
+  let candidates: unknown[] = [];
+
+  if (Array.isArray(rawList)) {
+    candidates = rawList;
+  } else if (typeof rawList === "string" && rawList.trim()) {
+    const trimmed = rawList.trim();
+    if (trimmed.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) candidates = parsed;
+      } catch {
+        // abaikan
+      }
+    } else {
+      candidates = trimmed.replace(/[{}"]/g, "").split(",");
+    }
+  }
+
+  if (candidates.length === 0 && typeof fallbackSingle === "string") {
+    candidates = fallbackSingle.replace(/[{}"]/g, "").split(",");
+  }
+
+  const normalized = candidates
+    .map((item) => String(item).trim().toUpperCase() as OptionKey)
+    .filter((k) => validSet.has(k));
+
+  return normalized.length > 0 ? Array.from(new Set(normalized)) : ["A"];
+}
+
+const DEMO_QUESTIONS: ExtendedQuestionData[] = [
   {
     id: "1",
+    game_mode: "CHESS",
     question_text:
       "Planet manakah yang dijuluki sebagai Planet Merah di tata surya kita?",
     options: { A: "Venus", B: "Mars", C: "Jupiter", D: "Saturnus" },
@@ -55,27 +228,30 @@ const DEMO_QUESTIONS: QuestionData[] = [
   },
   {
     id: "2",
+    game_mode: "MIRROR",
     question_text: "Berapakah hasil perkalian dari 12 × 8?",
     options: { A: "84", B: "92", C: "96", D: "108" },
     correct_option: "C",
     correct_options: ["C"],
     piece_type: "BISHOP",
-    obstacles: 3,
+    obstacles: 2,
     time_limit: 60,
   },
   {
     id: "3",
+    game_mode: "CIRCUIT",
     question_text:
       "Bahasa pemrograman apa yang berjalan langsung di dalam browser web?",
     options: { A: "JavaScript", B: "Python", C: "C++", D: "Go" },
     correct_option: "A",
     correct_options: ["A"],
     piece_type: "ROOK",
-    obstacles: 4,
+    obstacles: 2,
     time_limit: 60,
   },
   {
     id: "4",
+    game_mode: "STEALTH",
     question_text: 'Unsur kimia dengan simbol "Au" adalah...',
     options: { A: "Perak", B: "Aluminium", C: "Emas", D: "Tembaga" },
     correct_option: "C",
@@ -86,30 +262,92 @@ const DEMO_QUESTIONS: QuestionData[] = [
   },
   {
     id: "5",
+    game_mode: "SLIDE",
     question_text: "Di negara manakah Candi Borobudur berada?",
     options: { A: "Thailand", B: "Kamboja", C: "Vietnam", D: "Indonesia" },
     correct_option: "D",
     correct_options: ["D"],
     piece_type: "PAWN",
-    obstacles: 2,
+    obstacles: 3,
     time_limit: 60,
   },
   {
     id: "6",
+    game_mode: "COLLAPSE",
     question_text:
       "Hewan darat tercepat di dunia yang mampu berlari hingga 110 km/jam adalah...",
     options: { A: "Singa", B: "Cheetah", C: "Kuda", D: "Kangguru" },
     correct_option: "B",
     correct_options: ["B"],
     piece_type: "QUEEN",
-    obstacles: 4,
+    obstacles: 3,
     time_limit: 60,
+  },
+  {
+    id: "7",
+    game_mode: "FLUX",
+    question_text:
+      "Gas utama yang paling banyak menyusun atmosfer Bumi (sekitar 78%) adalah...",
+    options: {
+      A: "Oksigen",
+      B: "Karbon Dioksida",
+      C: "Nitrogen",
+      D: "Hidrogen",
+    },
+    correct_option: "C",
+    correct_options: ["C"],
+    piece_type: "KNIGHT",
+    obstacles: 2,
+    time_limit: 60,
+  },
+  {
+    id: "8",
+    game_mode: "SWITCH",
+    question_text:
+      "Benua manakah yang memiliki luas wilayah terbesar di dunia?",
+    options: { A: "Asia", B: "Afrika", C: "Amerika Utara", D: "Eropa" },
+    correct_option: "A",
+    correct_options: ["A"],
+    piece_type: "ROOK",
+    obstacles: 3,
+    time_limit: 60,
+  },
+  {
+    id: "9",
+    game_mode: "PORTAL",
+    question_text:
+      "Siapakah ilmuwan yang merumuskan hukum gravitasi universal?",
+    options: {
+      A: "Albert Einstein",
+      B: "Galileo Galilei",
+      C: "Nikola Tesla",
+      D: "Isaac Newton",
+    },
+    correct_option: "D",
+    correct_options: ["D"],
+    piece_type: "BISHOP",
+    obstacles: 3,
+    time_limit: 60,
+  },
+  {
+    id: "10",
+    game_mode: "SHIFT",
+    question_text:
+      "Pilih DUA bilangan prima di bawah ini! (Latihan Jawaban Ganda)",
+    options: { A: "7", B: "9", C: "11", D: "15" },
+    correct_option: "A",
+    correct_options: ["A", "C"],
+    allow_multiple: true,
+    piece_type: "QUEEN",
+    obstacles: 3,
+    time_limit: 75,
   },
 ];
 
-const DEMO_QUESTIONS_EN: QuestionData[] = [
+const DEMO_QUESTIONS_EN: ExtendedQuestionData[] = [
   {
     id: "1",
+    game_mode: "CHESS",
     question_text:
       "Which planet is known as the Red Planet in our solar system?",
     options: { A: "Venus", B: "Mars", C: "Jupiter", D: "Saturn" },
@@ -121,27 +359,30 @@ const DEMO_QUESTIONS_EN: QuestionData[] = [
   },
   {
     id: "2",
+    game_mode: "MIRROR",
     question_text: "What is the result of 12 × 8?",
     options: { A: "84", B: "92", C: "96", D: "108" },
     correct_option: "C",
     correct_options: ["C"],
     piece_type: "BISHOP",
-    obstacles: 3,
+    obstacles: 2,
     time_limit: 60,
   },
   {
     id: "3",
+    game_mode: "CIRCUIT",
     question_text:
       "Which programming language runs natively inside a web browser?",
     options: { A: "JavaScript", B: "Python", C: "C++", D: "Go" },
     correct_option: "A",
     correct_options: ["A"],
     piece_type: "ROOK",
-    obstacles: 4,
+    obstacles: 2,
     time_limit: 60,
   },
   {
     id: "4",
+    game_mode: "STEALTH",
     question_text: 'Which chemical element has the symbol "Au"?',
     options: { A: "Silver", B: "Aluminum", C: "Gold", D: "Copper" },
     correct_option: "C",
@@ -152,24 +393,84 @@ const DEMO_QUESTIONS_EN: QuestionData[] = [
   },
   {
     id: "5",
+    game_mode: "SLIDE",
     question_text: "In which country is Borobudur Temple located?",
     options: { A: "Thailand", B: "Cambodia", C: "Vietnam", D: "Indonesia" },
     correct_option: "D",
     correct_options: ["D"],
     piece_type: "PAWN",
-    obstacles: 2,
+    obstacles: 3,
     time_limit: 60,
   },
   {
     id: "6",
+    game_mode: "COLLAPSE",
     question_text:
       "What is the fastest land animal capable of running up to 110 km/h?",
     options: { A: "Lion", B: "Cheetah", C: "Horse", D: "Kangaroo" },
     correct_option: "B",
     correct_options: ["B"],
     piece_type: "QUEEN",
-    obstacles: 4,
+    obstacles: 3,
     time_limit: 60,
+  },
+  {
+    id: "7",
+    game_mode: "FLUX",
+    question_text:
+      "Which gas makes up the largest portion (~78%) of Earth's atmosphere?",
+    options: {
+      A: "Oxygen",
+      B: "Carbon Dioxide",
+      C: "Nitrogen",
+      D: "Hydrogen",
+    },
+    correct_option: "C",
+    correct_options: ["C"],
+    piece_type: "KNIGHT",
+    obstacles: 2,
+    time_limit: 60,
+  },
+  {
+    id: "8",
+    game_mode: "SWITCH",
+    question_text: "Which continent has the largest land area on Earth?",
+    options: { A: "Asia", B: "Africa", C: "North America", D: "Europe" },
+    correct_option: "A",
+    correct_options: ["A"],
+    piece_type: "ROOK",
+    obstacles: 3,
+    time_limit: 60,
+  },
+  {
+    id: "9",
+    game_mode: "PORTAL",
+    question_text:
+      "Which scientist formulated the law of universal gravitation?",
+    options: {
+      A: "Albert Einstein",
+      B: "Galileo Galilei",
+      C: "Nikola Tesla",
+      D: "Isaac Newton",
+    },
+    correct_option: "D",
+    correct_options: ["D"],
+    piece_type: "BISHOP",
+    obstacles: 3,
+    time_limit: 60,
+  },
+  {
+    id: "10",
+    game_mode: "SHIFT",
+    question_text:
+      "Select TWO prime numbers below! (Multiple Answers Practice)",
+    options: { A: "7", B: "9", C: "11", D: "15" },
+    correct_option: "A",
+    correct_options: ["A", "C"],
+    allow_multiple: true,
+    piece_type: "QUEEN",
+    obstacles: 3,
+    time_limit: 75,
   },
 ];
 
@@ -189,7 +490,9 @@ export default function PlayQuizPage() {
   const quizId = params.quizId as string;
   const { lang, t } = useLanguage();
 
-  const [questions, setQuestions] = useState<QuestionData[]>([]);
+  const isDemo = quizId === "demo";
+
+  const [questions, setQuestions] = useState<ExtendedQuestionData[]>([]);
   const [quizTitle, setQuizTitle] = useState("");
   const [timerMode, setTimerMode] = useState<"PER_QUESTION" | "TOTAL_QUIZ">(
     "PER_QUESTION",
@@ -199,6 +502,9 @@ export default function PlayQuizPage() {
   const [isMuted, setIsMuted] = useState(false);
 
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [demoModeOverride, setDemoModeOverride] = useState<GameMode | null>(
+    null,
+  );
   const [score, setScore] = useState(0);
   const [streak, setStreak] = useState(0);
   const [maxStreak, setMaxStreak] = useState(0);
@@ -249,12 +555,25 @@ export default function PlayQuizPage() {
     setIsMuted(nextMuted);
   };
 
+  // Sinkronisasi bahasa untuk soal Demo jika user mengganti bahasa saat bermain
+  useEffect(() => {
+    if (!isDemo) return;
+    setQuestions(lang === "EN" ? DEMO_QUESTIONS_EN : DEMO_QUESTIONS);
+    setQuizTitle(
+      lang === "EN"
+        ? "All-Modes Interactive Demo"
+        : "Demo Interaktif Semua Mode",
+    );
+  }, [isDemo, lang]);
+
   useEffect(() => {
     async function loadQuiz() {
-      if (quizId === "demo") {
+      if (isDemo) {
         setQuestions(lang === "EN" ? DEMO_QUESTIONS_EN : DEMO_QUESTIONS);
         setQuizTitle(
-          lang === "EN" ? "Demo Practice Mode" : "Mode Latihan Demo",
+          lang === "EN"
+            ? "All-Modes Interactive Demo"
+            : "Demo Interaktif Semua Mode",
         );
         setTimerMode("PER_QUESTION");
         setTimeLeft(DEFAULT_QUESTION_TIME);
@@ -283,26 +602,31 @@ export default function PlayQuizPage() {
         .order("order_index", { ascending: true });
 
       if (qRows && qRows.length > 0) {
-        const mapped: QuestionData[] = qRows.map((row) => ({
-          id: row.id,
-          question_text: row.question_text,
-          image_url: row.image_url || null,
-          options: {
-            A: row.option_a,
-            B: row.option_b,
-            C: row.option_c,
-            D: row.option_d,
-          },
-          correct_option: row.correct_option as OptionKey,
-          correct_options:
-            Array.isArray(row.correct_options) && row.correct_options.length > 0
-              ? (row.correct_options as OptionKey[])
-              : [row.correct_option as OptionKey],
-          allow_multiple: Boolean(row.allow_multiple),
-          time_limit: row.time_limit || DEFAULT_QUESTION_TIME,
-          piece_type: (row.piece_type || "KNIGHT") as PieceType,
-          obstacles: row.obstacles ?? 3,
-        }));
+        const mapped: ExtendedQuestionData[] = qRows.map((row) => {
+          const parsedKeys = parseOptionKeysSafe(
+            row.correct_options,
+            row.correct_option,
+          );
+          return {
+            id: row.id,
+            question_text: row.question_text,
+            image_url: row.image_url || null,
+            options: {
+              A: row.option_a,
+              B: row.option_b,
+              C: row.option_c,
+              D: row.option_d,
+            },
+            correct_option: parsedKeys[0],
+            correct_options: parsedKeys,
+            allow_multiple:
+              Boolean(row.allow_multiple) || parsedKeys.length > 1,
+            time_limit: row.time_limit || DEFAULT_QUESTION_TIME,
+            piece_type: (row.piece_type || "KNIGHT") as PieceType,
+            obstacles: row.obstacles ?? 3,
+            game_mode: normalizeGameMode(row.game_mode ?? row.board_mode),
+          };
+        });
         setQuestions(mapped);
 
         const initialDuration =
@@ -317,9 +641,14 @@ export default function PlayQuizPage() {
 
     loadQuiz();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [quizId]);
+  }, [quizId, isDemo]);
 
   const currentQuestion = questions[currentIndex];
+  const activeGameMode: GameMode =
+    isDemo && demoModeOverride
+      ? demoModeOverride
+      : normalizeGameMode(currentQuestion?.game_mode);
+
   const activePiece: PieceType = queenOverride
     ? "QUEEN"
     : currentQuestion?.piece_type || "KNIGHT";
@@ -329,6 +658,7 @@ export default function PlayQuizPage() {
     setLastPoints(null);
     setEliminatedOptions([]);
     setQueenOverride(false);
+    setDemoModeOverride(null);
 
     if (currentIndex + 1 >= questions.length) {
       setIsFinished(true);
@@ -375,13 +705,22 @@ export default function PlayQuizPage() {
         ...prev,
         {
           question: currentQuestion,
+          gameMode: activeGameMode,
           selectedOption: null,
           isCorrect: false,
           movesUsed: 0,
         },
       ]);
     }
-  }, [timeLeft, loading, currentQuestion, feedback, isFinished, timerMode]);
+  }, [
+    timeLeft,
+    loading,
+    currentQuestion,
+    feedback,
+    isFinished,
+    timerMode,
+    activeGameMode,
+  ]);
 
   // 3. Otomatis lanjut ke soal berikutnya 1.8 detik setelah feedback muncul
   useEffect(() => {
@@ -394,9 +733,7 @@ export default function PlayQuizPage() {
   if (loading) {
     return (
       <main className="min-h-screen bg-[#F2F7FC] flex items-center justify-center font-black text-slate-500">
-        {lang === "EN"
-          ? "Preparing Chessboard..."
-          : "Menyiapkan Papan Catur..."}
+        {lang === "EN" ? "Preparing Arena..." : "Menyiapkan Arena..."}
       </main>
     );
   }
@@ -417,11 +754,13 @@ export default function PlayQuizPage() {
     );
   }
 
-  const validCorrectKeys: OptionKey[] =
-    currentQuestion.correct_options &&
-    currentQuestion.correct_options.length > 0
-      ? currentQuestion.correct_options
-      : [currentQuestion.correct_option];
+  const validCorrectKeys: OptionKey[] = parseOptionKeysSafe(
+    currentQuestion.correct_options,
+    currentQuestion.correct_option,
+  );
+
+  const isCurrentMultiple =
+    Boolean(currentQuestion.allow_multiple) || validCorrectKeys.length > 1;
 
   const handleAnswer = (
     selected: OptionKey,
@@ -434,6 +773,7 @@ export default function PlayQuizPage() {
       ...prev,
       {
         question: currentQuestion,
+        gameMode: activeGameMode,
         selectedOption: selected,
         isCorrect,
         movesUsed,
@@ -463,6 +803,13 @@ export default function PlayQuizPage() {
     }
   };
 
+  const handleSelectDemoMode = (mode: GameMode) => {
+    if (!isDemo || feedback) return;
+    sound.playMove();
+    setQueenOverride(false);
+    setDemoModeOverride(mode);
+  };
+
   const activateFiftyFifty = () => {
     if (usedFiftyFifty || feedback) return;
     sound.playPowerUp();
@@ -475,7 +822,14 @@ export default function PlayQuizPage() {
   };
 
   const activateQueenBoost = () => {
-    if (usedQueenBoost || feedback || activePiece === "QUEEN") return;
+    if (
+      usedQueenBoost ||
+      feedback ||
+      activeGameMode !== "CHESS" ||
+      activePiece === "QUEEN"
+    ) {
+      return;
+    }
     sound.playPowerUp();
     setQueenOverride(true);
     setUsedQueenBoost(true);
@@ -483,6 +837,7 @@ export default function PlayQuizPage() {
 
   const resetGame = () => {
     setCurrentIndex(0);
+    setDemoModeOverride(null);
     setScore(0);
     setStreak(0);
     setMaxStreak(0);
@@ -504,12 +859,11 @@ export default function PlayQuizPage() {
     setIsFinished(false);
   };
 
-  const displayTitle =
-    quizId === "demo"
-      ? lang === "EN"
-        ? "Demo Practice Mode"
-        : "Mode Latihan Demo"
-      : quizTitle;
+  const displayTitle = isDemo
+    ? lang === "EN"
+      ? "All-Modes Interactive Demo"
+      : "Demo Interaktif Semua Mode"
+    : quizTitle;
 
   if (isFinished) {
     const accuracy = Math.round((correctCount / questions.length) * 100);
@@ -584,7 +938,7 @@ export default function PlayQuizPage() {
             </div>
           </motion.div>
 
-          {/* Pembahasan Soal (Anti-Truncate) */}
+          {/* Pembahasan Soal */}
           <div className="bg-white border-2 border-slate-200/90 border-b-[6px] rounded-[32px] p-6 sm:p-7 shadow-md">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
               <div className="flex items-center gap-2.5">
@@ -659,12 +1013,13 @@ export default function PlayQuizPage() {
                   const localizedPiece =
                     PIECE_META_I18N?.[lang]?.[record.question.piece_type] ||
                     pieceMeta;
+                  const modeInfo =
+                    GAME_MODE_MAP[record.gameMode] || GAME_MODE_MAP.CHESS;
 
-                  const recordCorrectKeys =
-                    record.question.correct_options &&
-                    record.question.correct_options.length > 0
-                      ? record.question.correct_options
-                      : [record.question.correct_option];
+                  const recordCorrectKeys = parseOptionKeysSafe(
+                    record.question.correct_options,
+                    record.question.correct_option,
+                  );
 
                   return (
                     <div
@@ -676,20 +1031,22 @@ export default function PlayQuizPage() {
                       }`}
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <span className="px-3 py-1 rounded-xl bg-slate-800 text-white text-xs font-black">
                             {lang === "EN"
                               ? `Question #${qIndex + 1}`
                               : `Soal #${qIndex + 1}`}
                           </span>
                           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-amber-100 text-amber-800 text-xs font-extrabold">
-                            {pieceMeta.symbol} {localizedPiece.name}
+                            {record.gameMode === "CHESS"
+                              ? `${pieceMeta.symbol} ${localizedPiece.name}`
+                              : `${modeInfo.icon} Tacti${modeInfo.label}`}
                           </span>
                           {record.movesUsed > 0 && (
                             <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-sky-100 text-sky-700 text-xs font-extrabold">
                               <Footprints className="w-3 h-3" />{" "}
                               {record.movesUsed}{" "}
-                              {lang === "EN" ? "moves" : "langkah"}
+                              {lang === "EN" ? "actions" : "aksi"}
                             </span>
                           )}
                         </div>
@@ -790,6 +1147,13 @@ export default function PlayQuizPage() {
 
   const progressPercent = ((currentIndex + 1) / questions.length) * 100;
   const timerPercent = (timeLeft / Math.max(1, maxCurrentTime)) * 100;
+  const currentModeInfo = GAME_MODE_MAP[activeGameMode] || GAME_MODE_MAP.CHESS;
+  const boardKey = `${currentQuestion.id}-${activeGameMode}`;
+  const isQueenBoostDisabled =
+    usedQueenBoost ||
+    Boolean(feedback) ||
+    activeGameMode !== "CHESS" ||
+    activePiece === "QUEEN";
 
   return (
     <main className="min-h-screen bg-[#F2F7FC] text-slate-800 pb-8">
@@ -797,13 +1161,13 @@ export default function PlayQuizPage() {
         <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 sm:h-20 flex items-center justify-between gap-3">
           <Link href="/" className="flex items-center gap-3 shrink-0">
             <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl bg-gradient-to-br from-[#3B9EFF] to-[#1D7AFC] text-white flex items-center justify-center text-2xl shadow-sm border-b-4 border-[#135BC4]">
-              ♞
+              {currentModeInfo.icon}
             </div>
             <div>
               <span className="font-black text-lg sm:text-xl tracking-tight text-slate-800 block leading-none">
                 Tacti<span className="text-[#2589FF]">Quiz</span>
               </span>
-              <span className="text-[11px] font-bold text-slate-400 truncate max-w-[120px] sm:max-w-[160px] block">
+              <span className="text-[11px] font-bold text-slate-400 truncate max-w-[130px] sm:max-w-[180px] block">
                 {displayTitle}
               </span>
             </div>
@@ -829,7 +1193,6 @@ export default function PlayQuizPage() {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
-            {/* Tombol Mute / Nyalakan Musik Belajar */}
             <button
               type="button"
               onClick={handleToggleMusic}
@@ -889,18 +1252,22 @@ export default function PlayQuizPage() {
 
       <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-5">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* Kolom Kiri: Soal, Pilihan Jawaban, & Power-Ups */}
           <div className="lg:col-span-7 flex flex-col gap-5">
             <div className="relative overflow-hidden rounded-[28px] bg-gradient-to-br from-[#4AA8FF] via-[#2B90FF] to-[#1A73E8] p-6 sm:p-7 text-white shadow-lg border-b-[6px] border-[#1359B8]">
               <div className="absolute -right-8 -bottom-10 w-44 h-44 rounded-full bg-white/10 pointer-events-none" />
-              <div className="flex items-center justify-between gap-3 mb-4">
-                <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+                <div className="flex flex-wrap items-center gap-2">
                   <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/20 text-xs font-extrabold">
                     <Sparkles className="w-3.5 h-3.5 text-amber-300" />
                     {lang === "EN"
                       ? `Question #${currentIndex + 1}`
                       : `Soal #${currentIndex + 1}`}
                   </span>
-                  {currentQuestion.allow_multiple && (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-900/25 text-xs font-extrabold">
+                    {currentModeInfo.icon} Tacti{currentModeInfo.label}
+                  </span>
+                  {isCurrentMultiple && (
                     <span className="text-[11px] font-black bg-amber-300 text-slate-900 px-2.5 py-0.5 rounded-full">
                       {lang === "EN"
                         ? "✨ Multiple correct answers"
@@ -973,9 +1340,7 @@ export default function PlayQuizPage() {
                           ? `${t("timeoutFeedback")} `
                           : `${t("wrongFeedback")} `}
                         {t("correctAnswerIs")}{" "}
-                        {validCorrectKeys.join(
-                          lang === "EN" ? " or " : " atau ",
-                        )}
+                        {validCorrectKeys.join(lang === "EN" ? " & " : " & ")}
                       </span>
                     </>
                   )}
@@ -1056,13 +1421,9 @@ export default function PlayQuizPage() {
                 <button
                   type="button"
                   onClick={activateQueenBoost}
-                  disabled={
-                    usedQueenBoost ||
-                    Boolean(feedback) ||
-                    activePiece === "QUEEN"
-                  }
+                  disabled={isQueenBoostDisabled}
                   className={`flex items-center gap-3.5 p-3.5 rounded-2xl border-2 border-b-4 text-left transition ${
-                    usedQueenBoost || activePiece === "QUEEN"
+                    isQueenBoostDisabled
                       ? "bg-slate-100 border-slate-200 opacity-50 cursor-not-allowed"
                       : "bg-[#FFF5E6] hover:bg-[#FFEDD1] border-[#FFE0B2] border-b-[#FFCC80] cursor-pointer active:translate-y-0.5"
                   }`}
@@ -1075,11 +1436,15 @@ export default function PlayQuizPage() {
                       {t("queenBoostTitle")}
                     </p>
                     <p className="text-xs font-medium text-slate-500">
-                      {usedQueenBoost
-                        ? t("alreadyUsed")
-                        : lang === "EN"
-                          ? "Slide freely in any direction"
-                          : "Bebas meluncur ke segala arah"}
+                      {activeGameMode !== "CHESS"
+                        ? lang === "EN"
+                          ? "Available in Chess mode only"
+                          : "Khusus untuk mode Catur"
+                        : usedQueenBoost
+                          ? t("alreadyUsed")
+                          : lang === "EN"
+                            ? "Slide freely in any direction"
+                            : "Bebas meluncur ke segala arah"}
                     </p>
                   </div>
                 </button>
@@ -1087,18 +1452,145 @@ export default function PlayQuizPage() {
             </div>
           </div>
 
+          {/* Kolom Kanan: Arena Papan Interaktif (Semua 10 Mode Terhubung) */}
           <div className="lg:col-span-5 bg-white p-4 sm:p-5 rounded-[28px] border-2 border-slate-200/90 border-b-[6px] shadow-md">
-            <ChessQuizBoard
-              question={currentQuestion}
-              activePiece={activePiece}
-              eliminatedOptions={eliminatedOptions}
-              disabled={Boolean(feedback)}
-              onAnswer={handleAnswer}
-            />
+            {/* Switcher Cepat 10 Mode Khusus Demo */}
+            {isDemo && (
+              <div className="mb-3.5 pb-3 border-b border-slate-100">
+                <p className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-2">
+                  {lang === "EN"
+                    ? "Switch Arena Mode (Live Demo)"
+                    : "Pilih Mode Arena (Demo Langsung)"}
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {ALL_GAME_MODES.map((m) => {
+                    const isSelected = activeGameMode === m.id;
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        disabled={Boolean(feedback)}
+                        onClick={() => handleSelectDemoMode(m.id)}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-black border transition cursor-pointer disabled:opacity-50 ${
+                          isSelected
+                            ? "bg-slate-900 border-slate-900 text-white shadow-xs"
+                            : "bg-slate-50 hover:bg-sky-50 border-slate-200 text-slate-600"
+                        }`}
+                      >
+                        <span>{m.icon}</span>
+                        <span>{m.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {activeGameMode === "CHESS" && (
+              <ChessQuizBoard
+                key={boardKey}
+                question={currentQuestion}
+                activePiece={activePiece}
+                eliminatedOptions={eliminatedOptions}
+                disabled={Boolean(feedback)}
+                onAnswer={handleAnswer}
+              />
+            )}
+
+            {activeGameMode === "MIRROR" && (
+              <TactiMirrorBoard
+                key={boardKey}
+                question={currentQuestion}
+                eliminatedOptions={eliminatedOptions}
+                disabled={Boolean(feedback)}
+                onAnswer={handleAnswer}
+              />
+            )}
+
+            {activeGameMode === "CIRCUIT" && (
+              <TactiCircuitBoard
+                key={boardKey}
+                question={currentQuestion}
+                eliminatedOptions={eliminatedOptions}
+                disabled={Boolean(feedback)}
+                onAnswer={handleAnswer}
+              />
+            )}
+
+            {activeGameMode === "STEALTH" && (
+              <TactiStealthBoard
+                key={boardKey}
+                question={currentQuestion}
+                eliminatedOptions={eliminatedOptions}
+                disabled={Boolean(feedback)}
+                onAnswer={handleAnswer}
+              />
+            )}
+
+            {activeGameMode === "SLIDE" && (
+              <TactiSlideBoard
+                key={boardKey}
+                question={currentQuestion}
+                eliminatedOptions={eliminatedOptions}
+                disabled={Boolean(feedback)}
+                onAnswer={handleAnswer}
+              />
+            )}
+
+            {activeGameMode === "COLLAPSE" && (
+              <TactiCollapseBoard
+                key={boardKey}
+                question={currentQuestion}
+                eliminatedOptions={eliminatedOptions}
+                disabled={Boolean(feedback)}
+                onAnswer={handleAnswer}
+              />
+            )}
+
+            {activeGameMode === "FLUX" && (
+              <TactiFluxBoard
+                key={boardKey}
+                question={currentQuestion}
+                eliminatedOptions={eliminatedOptions}
+                disabled={Boolean(feedback)}
+                onAnswer={handleAnswer}
+              />
+            )}
+
+            {activeGameMode === "SWITCH" && (
+              <TactiSwitchBoard
+                key={boardKey}
+                question={currentQuestion}
+                eliminatedOptions={eliminatedOptions}
+                disabled={Boolean(feedback)}
+                onAnswer={handleAnswer}
+              />
+            )}
+
+            {activeGameMode === "PORTAL" && (
+              <TactiPortalBoard
+                key={boardKey}
+                question={currentQuestion}
+                eliminatedOptions={eliminatedOptions}
+                disabled={Boolean(feedback)}
+                onAnswer={handleAnswer}
+              />
+            )}
+
+            {activeGameMode === "SHIFT" && (
+              <TactiShiftBoard
+                key={boardKey}
+                question={currentQuestion}
+                eliminatedOptions={eliminatedOptions}
+                disabled={Boolean(feedback)}
+                onAnswer={handleAnswer}
+              />
+            )}
 
             <div className="mt-3.5 px-4 py-2.5 rounded-2xl bg-amber-50 border border-amber-200 text-center">
-              <p className="text-xs font-bold text-amber-800">
-                💡 {t("boardTip")}
+              <p className="text-xs font-bold text-amber-800 leading-snug">
+                💡{" "}
+                {lang === "EN" ? currentModeInfo.tipEn : currentModeInfo.tipId}
               </p>
             </div>
           </div>

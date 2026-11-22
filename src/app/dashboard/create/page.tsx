@@ -22,15 +22,23 @@ import {
   Superscript,
   Subscript,
   Check,
+  RotateCcw,
 } from "lucide-react";
-import ChessQuizBoard, {
+import {
   QuestionData,
   OptionKey,
   PieceType,
   PIECE_META,
   OPTION_STYLES,
 } from "@/components/ChessQuizBoard";
+import TactiBoardDispatcher from "@/components/boards/TactiBoardDispatcher";
+import FormattedText from "@/components/FormattedText";
 import { useLanguage } from "@/components/LanguageProvider";
+import {
+  CONCRETE_GAME_MODES,
+  ConcreteGameMode,
+  GAME_MODES_META,
+} from "@/lib/gameModes";
 import { PIECE_META_I18N } from "@/lib/i18n";
 import { supabase } from "@/lib/supabase";
 import { getTeacherSession, TeacherSession } from "@/lib/auth";
@@ -120,6 +128,8 @@ export default function CreateQuizPage() {
     createEmptyQuestion(),
   ]);
   const [previewIdx, setPreviewIdx] = useState<number>(0);
+  const [previewMode, setPreviewMode] = useState<ConcreteGameMode>("CHESS");
+  const [previewResetNonce, setPreviewResetNonce] = useState<number>(0);
   const [saving, setSaving] = useState(false);
 
   // State toolbar format & simbol matematika
@@ -150,8 +160,12 @@ export default function CreateQuizPage() {
         ? "Return to Quiz Library? Unsaved changes will be lost."
         : "Kembali ke Bank Kuis? Perubahan yang belum disimpan akan hilang.";
 
-    if (hasDraft && !(await window.modernConfirm(msg))) {
-      return;
+    if (hasDraft) {
+      const confirmed =
+        typeof window.modernConfirm === "function"
+          ? await window.modernConfirm(msg)
+          : window.confirm(msg);
+      if (!confirmed) return;
     }
 
     router.push("/dashboard");
@@ -517,7 +531,7 @@ export default function CreateQuizPage() {
   const currentPreviewDraft = questions[safePreviewIdx] || questions[0];
 
   const previewQuestionData: QuestionData = {
-    id: currentPreviewDraft.localId,
+    id: `${currentPreviewDraft.localId}-${previewResetNonce}`,
     question_text: currentPreviewDraft.question_text,
     image_url: currentPreviewDraft.image_url,
     options: currentPreviewDraft.options,
@@ -1117,7 +1131,7 @@ export default function CreateQuizPage() {
                     </span>
                   </div>
 
-                  {/* Pemilih Bidak Catur & Jumlah Batu Rintangan */}
+                  {/* Pemilih Bidak TactiChess & Jumlah Batu Rintangan */}
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex flex-wrap items-center gap-1.5">
                       {PIECE_LIST.map((piece) => {
@@ -1189,32 +1203,85 @@ export default function CreateQuizPage() {
             </button>
           </div>
 
-          {/* Kolom Kanan: Live Preview Papan Catur */}
+          {/* Kolom Kanan: Live Preview Multi-Mode Arena */}
           <div className="lg:col-span-5 lg:sticky lg:top-24 bg-white p-5 rounded-[28px] border-2 border-slate-200/90 border-b-[6px] shadow-sm">
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center justify-between gap-2 mb-3">
               <span className="inline-flex items-center gap-1.5 text-xs font-black uppercase tracking-wider text-[#2589FF]">
                 <Sparkles className="w-3.5 h-3.5" />
                 {lang === "EN"
-                  ? `LIVE QUESTION PREVIEW #${safePreviewIdx + 1}`
+                  ? `LIVE PREVIEW #${safePreviewIdx + 1}`
                   : `LIVE PREVIEW SOAL #${safePreviewIdx + 1}`}
               </span>
-              <span className="text-[11px] font-bold text-slate-400">
-                {lang === "EN" ? "Click board to test" : "Klik papan untuk tes"}
-              </span>
+
+              <button
+                type="button"
+                onClick={() => setPreviewResetNonce((n) => n + 1)}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 text-[11px] font-black transition cursor-pointer"
+                title={
+                  lang === "EN"
+                    ? "Reset preview board"
+                    : "Reset papan pratinjau"
+                }
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>{lang === "EN" ? "Reset Test" : "Reset Tes"}</span>
+              </button>
+            </div>
+
+            {/* Pemilih Cepat 10 Mode Arena untuk Uji Coba Soal */}
+            <div className="mb-3">
+              <p className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 mb-1.5">
+                {lang === "EN"
+                  ? "Test Question on Arena Mode:"
+                  : "Uji Soal pada Mode Arena:"}
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {CONCRETE_GAME_MODES.map((mId) => {
+                  const meta = GAME_MODES_META[mId];
+                  const active = previewMode === mId;
+                  return (
+                    <button
+                      key={mId}
+                      type="button"
+                      onClick={() => setPreviewMode(mId)}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-black border transition cursor-pointer ${
+                        active
+                          ? "bg-sky-50 border-[#2B90FF] text-[#1D7AFC] shadow-2xs"
+                          : "bg-[#F8FBFF] border-slate-200 text-slate-600 hover:bg-slate-100"
+                      }`}
+                    >
+                      <span>{meta.emoji}</span>
+                      <span>{meta.name.replace("Tacti", "")}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
 
             <div className="p-3.5 rounded-2xl bg-[#F8FBFF] border border-slate-200 mb-4">
-              <p className="text-sm font-extrabold text-slate-700 leading-snug">
-                {currentPreviewDraft.question_text.trim() ||
-                  (lang === "EN"
-                    ? "Question text will appear here..."
-                    : "Teks pertanyaan akan muncul di sini...")}
-              </p>
+              {currentPreviewDraft.image_url && (
+                <img
+                  src={currentPreviewDraft.image_url}
+                  alt="Preview attachment"
+                  className="max-h-32 mx-auto mb-2 rounded-xl object-contain"
+                />
+              )}
+              <div className="text-sm font-extrabold text-slate-700 leading-snug">
+                {currentPreviewDraft.question_text.trim() ? (
+                  <FormattedText text={currentPreviewDraft.question_text} />
+                ) : lang === "EN" ? (
+                  "Question text will appear here..."
+                ) : (
+                  "Teks pertanyaan akan muncul di sini..."
+                )}
+              </div>
             </div>
 
-            <ChessQuizBoard
-              key={`preview-${currentPreviewDraft.localId}-${currentPreviewDraft.piece_type}-${currentPreviewDraft.obstacles}`}
+            <TactiBoardDispatcher
+              key={`preview-${currentPreviewDraft.localId}-${previewMode}-${currentPreviewDraft.piece_type}-${currentPreviewDraft.obstacles}-${previewResetNonce}`}
+              mode={previewMode}
               question={previewQuestionData}
+              activePiece={currentPreviewDraft.piece_type}
               onAnswer={() => {}}
             />
           </div>

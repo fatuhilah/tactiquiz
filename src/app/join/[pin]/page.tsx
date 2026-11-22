@@ -34,15 +34,17 @@ import {
   ShieldAlert,
   RefreshCw,
 } from "lucide-react";
-import ChessQuizBoard, {
+import {
   QuestionData,
   OptionKey,
   PieceType,
   PIECE_META,
   OPTION_STYLES,
 } from "@/components/ChessQuizBoard";
+import TactiBoardDispatcher from "@/components/boards/TactiBoardDispatcher";
 import FormattedText from "@/components/FormattedText";
 import { useLanguage } from "@/components/LanguageProvider";
+import { GAME_MODES_META, resolveConcreteGameMode } from "@/lib/gameModes";
 import { PIECE_META_I18N } from "@/lib/i18n";
 import {
   HostingMode,
@@ -113,6 +115,40 @@ function formatSeconds(sec: number): string {
   const mins = Math.floor(s / 60);
   const rem = s % 60;
   return `${mins}:${String(rem).padStart(2, "0")}`;
+}
+
+function parseOptionKeys(
+  rawList: unknown,
+  fallbackSingle?: unknown,
+): OptionKey[] {
+  const validSet = new Set<OptionKey>(["A", "B", "C", "D"]);
+  let candidates: unknown[] = [];
+
+  if (Array.isArray(rawList)) {
+    candidates = rawList;
+  } else if (typeof rawList === "string" && rawList.trim()) {
+    const trimmed = rawList.trim();
+    if (trimmed.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) candidates = parsed;
+      } catch {
+        // abaikan error parse
+      }
+    } else {
+      candidates = trimmed.replace(/[{}"]/g, "").split(",");
+    }
+  }
+
+  if (candidates.length === 0 && typeof fallbackSingle === "string") {
+    candidates = fallbackSingle.replace(/[{}"]/g, "").split(",");
+  }
+
+  const normalized = candidates
+    .map((item) => String(item).trim().toUpperCase() as OptionKey)
+    .filter((k) => validSet.has(k));
+
+  return normalized.length > 0 ? Array.from(new Set(normalized)) : ["A"];
 }
 
 export default function PlayerJoinAndPlayPage() {
@@ -377,17 +413,19 @@ export default function PlayerJoinAndPlayPage() {
       .single();
 
     if (data) {
+      const typed = data as RoomData;
+      setSessionSettings(parseSessionSettings(typed.settings));
       setRoom((prev) => {
         if (
           prev &&
-          prev.status === data.status &&
-          prev.current_question_index === data.current_question_index &&
-          prev.reveal_answer === data.reveal_answer &&
-          prev.hosting_mode === data.hosting_mode
+          prev.status === typed.status &&
+          prev.current_question_index === typed.current_question_index &&
+          prev.reveal_answer === typed.reveal_answer &&
+          prev.hosting_mode === typed.hosting_mode
         ) {
           return prev;
         }
-        return data as RoomData;
+        return typed;
       });
     }
   }, []);
@@ -464,10 +502,16 @@ export default function PlayerJoinAndPlayPage() {
             C: row.option_c,
             D: row.option_d,
           };
-          const origCorrect: OptionKey[] =
-            Array.isArray(row.correct_options) && row.correct_options.length > 0
-              ? (row.correct_options as OptionKey[])
-              : [row.correct_option as OptionKey];
+
+          const origCorrect: OptionKey[] = parseOptionKeys(
+            row.correct_options,
+            row.correct_option,
+          );
+          const isAllowMultiple =
+            row.allow_multiple === true ||
+            String(row.allow_multiple) === "true" ||
+            Number(row.allow_multiple) === 1 ||
+            origCorrect.length > 1;
 
           const keys: OptionKey[] = ["A", "B", "C", "D"];
           const arrangedKeys: OptionKey[] =
@@ -497,7 +541,7 @@ export default function PlayerJoinAndPlayPage() {
             optionKeyMap,
             correct_option: remappedCorrect[0] || "A",
             correct_options: remappedCorrect,
-            allow_multiple: Boolean(row.allow_multiple),
+            allow_multiple: isAllowMultiple,
             time_limit: row.time_limit || 60,
             piece_type: (row.piece_type || "KNIGHT") as PieceType,
             obstacles: row.obstacles ?? 3,
@@ -660,7 +704,7 @@ export default function PlayerJoinAndPlayPage() {
     cheatStorageKey,
   ]);
 
-  // Sinkronisasi Realtime perubahan Room (termasuk pindah soal pada Teacher-Led)
+  // Sinkronisasi Realtime perubahan Room (termasuk pindah soal & ganti mode pada Host)
   useEffect(() => {
     if (!room?.id) return;
 
@@ -675,7 +719,9 @@ export default function PlayerJoinAndPlayPage() {
           filter: `id=eq.${room.id}`,
         },
         (payload) => {
-          setRoom(payload.new as RoomData);
+          const updated = payload.new as RoomData;
+          setRoom(updated);
+          setSessionSettings(parseSessionSettings(updated.settings));
         },
       )
       .subscribe();
@@ -1235,6 +1281,8 @@ export default function PlayerJoinAndPlayPage() {
   // ==================== STATE 2: RUANG TUNGGU (LOBBY) ====================
   if (room.status === "waiting") {
     const avatarMeta = PIECE_META[player.piece_skin] || PIECE_META.KNIGHT;
+    const lobbyModeMeta = GAME_MODES_META[sessionSettings.game_mode];
+
     return (
       <main className="min-h-screen bg-[#F2F7FC] text-slate-800 flex items-center justify-center p-4">
         <div className="w-full max-w-md bg-white p-8 rounded-[32px] border-2 border-slate-200 border-b-8 text-center shadow-xl">
@@ -1257,6 +1305,11 @@ export default function PlayerJoinAndPlayPage() {
             {t("waitingSub")}
           </p>
 
+          <div className="mb-4 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-sky-50 border border-sky-200 text-sky-800 text-xs font-black">
+            <span>{lobbyModeMeta.emoji}</span>
+            <span>Arena: {lobbyModeMeta.name}</span>
+          </div>
+
           {isTeacherLed && (
             <div className="mb-5 p-3 rounded-2xl bg-indigo-50 border border-indigo-200 text-indigo-800 text-xs font-extrabold">
               📺{" "}
@@ -1266,13 +1319,15 @@ export default function PlayerJoinAndPlayPage() {
             </div>
           )}
 
-          <button
-            type="button"
-            onClick={handleLeaveRoom}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-100 hover:bg-rose-50 text-slate-500 hover:text-rose-600 font-bold text-xs transition cursor-pointer"
-          >
-            <LogOut className="w-3.5 h-3.5" /> {t("changeCharBtn")}
-          </button>
+          <div>
+            <button
+              type="button"
+              onClick={handleLeaveRoom}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-100 hover:bg-rose-50 text-slate-500 hover:text-rose-600 font-bold text-xs transition cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" /> {t("changeCharBtn")}
+            </button>
+          </div>
         </div>
       </main>
     );
@@ -1557,8 +1612,13 @@ export default function PlayerJoinAndPlayPage() {
 
   // ==================== STATE 4: ARENA BERMAIN LIVE ====================
   const currentQuestion = questions[localQIndex] || questions[0];
+  const activeBoardMode = resolveConcreteGameMode(
+    sessionSettings.game_mode,
+    currentQuestion.id,
+  );
+  const isChessMode = activeBoardMode === "CHESS";
   const activePiece: PieceType =
-    canUsePowerUps && queenOverride
+    isChessMode && canUsePowerUps && queenOverride
       ? "QUEEN"
       : currentQuestion?.piece_type || "KNIGHT";
   const timerPercent = (timeLeft / Math.max(1, maxCurrentTime)) * 100;
@@ -1682,8 +1742,8 @@ export default function PlayerJoinAndPlayPage() {
                 </h1>
                 <p className="text-xs sm:text-sm font-semibold text-sky-100">
                   {lang === "EN"
-                    ? "Move your chess piece on the board to capture the matching option letter (A, B, C, or D)."
-                    : "Gerakkan bidak caturmu untuk menangkap huruf pilihan jawaban (A, B, C, atau D) yang sesuai."}
+                    ? "Use the tactical board on the right to capture the matching option letter (A, B, C, or D)."
+                    : "Gunakan papan taktis di samping untuk menangkap huruf pilihan jawaban (A, B, C, atau D) yang sesuai."}
                 </p>
               </div>
             ) : (
@@ -1796,7 +1856,22 @@ export default function PlayerJoinAndPlayPage() {
               </div>
             )}
 
-            {/* Pilihan Jawaban: Pada Teacher-Led cukup tampilkan Huruf A, B, C, D karena teks opsi ada di Share Screen Guru */}
+            {/* Badge Peringatan Visual di Atas 4 Kartu Pilihan saat Multiple Answers Aktif */}
+            {currentQuestion.allow_multiple && (
+              <div className="flex items-center justify-between gap-2 px-4 py-2.5 rounded-2xl bg-purple-50 border-2 border-purple-200 text-purple-900">
+                <span className="inline-flex items-center gap-1.5 text-xs sm:text-sm font-black">
+                  <Sparkles className="w-4 h-4 text-purple-600 shrink-0" />
+                  {lang === "EN"
+                    ? "Select more than 1 answer: Capture all correct letters on the board!"
+                    : "Pilih lebih dari 1 jawaban: Tangkap semua huruf benar di papan!"}
+                </span>
+                <span className="px-2.5 py-0.5 rounded-full bg-purple-600 text-white text-[10px] font-black uppercase tracking-wider shrink-0">
+                  Multi
+                </span>
+              </div>
+            )}
+
+            {/* Pilihan Jawaban: Teacher-Led vs Student-Paced */}
             {isTeacherLed ? (
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 {(["A", "B", "C", "D"] as OptionKey[]).map((key) => {
@@ -1804,8 +1879,11 @@ export default function PlayerJoinAndPlayPage() {
                   return (
                     <div
                       key={key}
-                      className={`flex flex-col items-center justify-center p-4 rounded-2xl border-2 border-b-4 ${style.cardBg} ${style.cardBorder}`}
+                      className={`relative flex flex-col items-center justify-center p-4 rounded-2xl border-2 border-b-4 ${style.cardBg} ${style.cardBorder}`}
                     >
+                      {currentQuestion.allow_multiple && (
+                        <span className="absolute top-2 right-2 w-4 h-4 rounded-md border-2 border-purple-400 bg-white/80" />
+                      )}
                       <span
                         className={`w-11 h-11 rounded-xl ${style.badgeBg} text-white font-black text-lg flex items-center justify-center shadow-xs mb-1.5`}
                       >
@@ -1826,20 +1904,33 @@ export default function PlayerJoinAndPlayPage() {
                   return (
                     <div
                       key={key}
-                      className={`flex items-start gap-3 p-3.5 rounded-2xl border-2 border-b-4 ${
+                      className={`flex items-start justify-between gap-2.5 p-3.5 rounded-2xl border-2 border-b-4 ${
                         isEliminated
                           ? "opacity-35 line-through bg-slate-100 border-slate-200"
                           : `${style.cardBg} ${style.cardBorder}`
                       }`}
                     >
-                      <span
-                        className={`w-9 h-9 rounded-xl ${style.badgeBg} text-white font-black text-sm flex items-center justify-center shrink-0`}
-                      >
-                        {key}
-                      </span>
-                      <span className="text-sm sm:text-base font-extrabold text-slate-700 whitespace-normal break-words leading-snug pt-1">
-                        <FormattedText text={currentQuestion.options[key]} />
-                      </span>
+                      <div className="flex items-start gap-3 min-w-0 flex-1">
+                        <span
+                          className={`w-9 h-9 rounded-xl ${style.badgeBg} text-white font-black text-sm flex items-center justify-center shrink-0`}
+                        >
+                          {key}
+                        </span>
+                        <span className="text-sm sm:text-base font-extrabold text-slate-700 whitespace-normal break-words leading-snug pt-1">
+                          <FormattedText text={currentQuestion.options[key]} />
+                        </span>
+                      </div>
+
+                      {currentQuestion.allow_multiple && !isEliminated && (
+                        <span
+                          title={
+                            lang === "EN"
+                              ? "Multiple choice option"
+                              : "Opsi pilihan ganda"
+                          }
+                          className="w-5 h-5 mt-2 rounded-md border-2 border-purple-400 bg-white/90 shrink-0"
+                        />
+                      )}
                     </div>
                   );
                 })}
@@ -1854,7 +1945,9 @@ export default function PlayerJoinAndPlayPage() {
                     ? "Special Power-Ups (1x use per session)"
                     : "Kartu Bantuan Spesial (1x pakai per sesi)"}
                 </p>
-                <div className="grid grid-cols-2 gap-3">
+                <div
+                  className={`grid ${isChessMode ? "grid-cols-2" : "grid-cols-1"} gap-3`}
+                >
                   <button
                     type="button"
                     onClick={activateFiftyFifty}
@@ -1878,40 +1971,43 @@ export default function PlayerJoinAndPlayPage() {
                     </span>
                   </button>
 
-                  <button
-                    type="button"
-                    onClick={activateQueenBoost}
-                    disabled={
-                      usedQueenBoost ||
-                      hasAnsweredCurrent ||
-                      activePiece === "QUEEN"
-                    }
-                    className={`flex items-center justify-between gap-2 p-3 rounded-2xl border-2 border-b-4 text-left transition ${
-                      usedQueenBoost || activePiece === "QUEEN"
-                        ? "bg-slate-100 border-slate-200 opacity-50 cursor-not-allowed"
-                        : "bg-[#FFF5E6] border-[#FFE0B2] border-b-[#FFCC80] cursor-pointer"
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <div className="w-9 h-9 rounded-xl bg-[#FF9800] text-white flex items-center justify-center shrink-0">
-                        <Crown className="w-4 h-4" />
+                  {isChessMode && (
+                    <button
+                      type="button"
+                      onClick={activateQueenBoost}
+                      disabled={
+                        usedQueenBoost ||
+                        hasAnsweredCurrent ||
+                        activePiece === "QUEEN"
+                      }
+                      className={`flex items-center justify-between gap-2 p-3 rounded-2xl border-2 border-b-4 text-left transition ${
+                        usedQueenBoost || activePiece === "QUEEN"
+                          ? "bg-slate-100 border-slate-200 opacity-50 cursor-not-allowed"
+                          : "bg-[#FFF5E6] border-[#FFE0B2] border-b-[#FFCC80] cursor-pointer"
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="w-9 h-9 rounded-xl bg-[#FF9800] text-white flex items-center justify-center shrink-0">
+                          <Crown className="w-4 h-4" />
+                        </div>
+                        <span className="font-extrabold text-xs text-slate-800 truncate">
+                          {t("queenBoostTitle")}
+                        </span>
                       </div>
-                      <span className="font-extrabold text-xs text-slate-800 truncate">
-                        {t("queenBoostTitle")}
+                      <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-white border border-slate-200 text-slate-600 shrink-0">
+                        {usedQueenBoost ? "0x" : "1x"}
                       </span>
-                    </div>
-                    <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-white border border-slate-200 text-slate-600 shrink-0">
-                      {usedQueenBoost ? "0x" : "1x"}
-                    </span>
-                  </button>
+                    </button>
+                  )}
                 </div>
               </div>
             )}
           </div>
 
           <div className="lg:col-span-5 bg-white p-4 sm:p-5 rounded-[28px] border-2 border-slate-200/90 border-b-[6px] shadow-md">
-            <ChessQuizBoard
-              key={`live-q-${localQIndex}-${isRedemptionRound ? "redeem" : "main"}`}
+            <TactiBoardDispatcher
+              key={`live-q-${localQIndex}-${activeBoardMode}-${isRedemptionRound ? "redeem" : "main"}`}
+              mode={activeBoardMode}
               question={currentQuestion}
               activePiece={activePiece}
               eliminatedOptions={eliminatedOptions}

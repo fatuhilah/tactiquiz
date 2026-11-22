@@ -31,9 +31,15 @@ import {
   Volume2,
   VolumeX,
   ShieldAlert,
+  SlidersHorizontal,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { getTeacherSession, TeacherSession } from "@/lib/auth";
+import {
+  GAME_MODES_META,
+  TactiGameMode,
+  resolveConcreteGameMode,
+} from "@/lib/gameModes";
 import {
   HostingMode,
   RoomSessionSettings,
@@ -46,6 +52,7 @@ import {
   OptionKey,
   OPTION_STYLES,
 } from "@/components/ChessQuizBoard";
+import GameModeSelector from "@/components/GameModeSelector";
 import FormattedText from "@/components/FormattedText";
 import { useLanguage } from "@/components/LanguageProvider";
 import { PIECE_META_I18N } from "@/lib/i18n";
@@ -152,6 +159,7 @@ export default function HostRoomPage() {
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const [showLiveModeDrawer, setShowLiveModeDrawer] = useState(false);
 
   const [activeTab, setActiveTab] = useState<"LEADERBOARD" | "QUESTIONS">(
     "LEADERBOARD",
@@ -193,17 +201,19 @@ export default function HostRoomPage() {
       .single();
 
     if (data) {
+      const typed = data as RoomData;
+      setSessionSettings(parseSessionSettings(typed.settings));
       setRoom((prev) => {
         if (
           prev &&
-          prev.status === data.status &&
-          prev.current_question_index === data.current_question_index &&
-          prev.reveal_answer === data.reveal_answer &&
-          prev.hosting_mode === data.hosting_mode
+          prev.status === typed.status &&
+          prev.current_question_index === typed.current_question_index &&
+          prev.reveal_answer === typed.reveal_answer &&
+          prev.hosting_mode === typed.hosting_mode
         ) {
           return prev;
         }
-        return data as RoomData;
+        return typed;
       });
     }
   }, []);
@@ -309,7 +319,9 @@ export default function HostRoomPage() {
           filter: `id=eq.${room.id}`,
         },
         (payload) => {
-          setRoom(payload.new as RoomData);
+          const updated = payload.new as RoomData;
+          setRoom(updated);
+          setSessionSettings(parseSessionSettings(updated.settings));
         },
       )
       .subscribe();
@@ -324,6 +336,22 @@ export default function HostRoomPage() {
       clearInterval(interval);
     };
   }, [room?.id, teacher, fetchPlayers, syncRoom]);
+
+  const handleChangeGameMode = async (nextMode: TactiGameMode) => {
+    if (!room || sessionSettings.game_mode === nextMode) return;
+    sound.playMove();
+    const nextSettings: RoomSessionSettings = {
+      ...sessionSettings,
+      game_mode: nextMode,
+    };
+    setSessionSettings(nextSettings);
+    setRoom((prev) => (prev ? { ...prev, settings: nextSettings } : prev));
+
+    await supabase
+      .from("rooms")
+      .update({ settings: nextSettings })
+      .eq("id", room.id);
+  };
 
   const isTeacherLed = room?.hosting_mode === "TEACHER_LED";
   const teacherLedQIdx = Math.min(
@@ -581,8 +609,12 @@ export default function HostRoomPage() {
         ? "End the game now and show the winners podium?"
         : "Akhiri permainan sekarang dan tampilkan podium pemenang?";
 
-    if (!skipConfirm && !(await window.modernConfirm(confirmMsg))) {
-      return;
+    if (!skipConfirm) {
+      const confirmed =
+        typeof window.modernConfirm === "function"
+          ? await window.modernConfirm(confirmMsg)
+          : window.confirm(confirmMsg);
+      if (!confirmed) return;
     }
     setUpdating(true);
     sound.playCorrect();
@@ -614,6 +646,8 @@ export default function HostRoomPage() {
   const allStudentsFinished =
     players.length > 0 && finishedCount === players.length;
 
+  const selectedModeMeta = GAME_MODES_META[sessionSettings.game_mode];
+
   // ==================== LAYAR SOAL SHARE SCREEN (TEACHER-LED) ====================
   const renderTeacherLedStage = () => {
     const currentQ = questions[teacherLedQIdx];
@@ -631,6 +665,12 @@ export default function HostRoomPage() {
       currentQ.correct_options.length > 0
         ? currentQ.correct_options
         : [currentQ.correct_option];
+
+    const activeConcreteMode = resolveConcreteGameMode(
+      sessionSettings.game_mode,
+      currentQ.id,
+    );
+    const activeConcreteMeta = GAME_MODES_META[activeConcreteMode];
 
     const pieceMeta = PIECE_META[currentQ.piece_type] || PIECE_META.KNIGHT;
     const localizedPiece =
@@ -651,7 +691,7 @@ export default function HostRoomPage() {
 
     return (
       <div className="bg-white p-6 sm:p-8 rounded-[32px] border-2 border-slate-200/90 border-b-[6px] shadow-md flex flex-col gap-6">
-        {/* Bar Status Atas: Nomor Soal + Timer + Jumlah Siswa Menjawab */}
+        {/* Bar Status Atas: Nomor Soal + Mode Arena + Timer + Jumlah Siswa Menjawab */}
         <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-200">
           <div className="flex flex-wrap items-center gap-2">
             <span className="px-3.5 py-1.5 rounded-xl bg-slate-900 text-white text-xs sm:text-sm font-black">
@@ -659,9 +699,17 @@ export default function HostRoomPage() {
                 ? `Question ${teacherLedQIdx + 1} of ${questions.length}`
                 : `Soal ${teacherLedQIdx + 1} dari ${questions.length}`}
             </span>
-            <span className="px-3 py-1.5 rounded-xl bg-amber-100 text-amber-800 text-xs font-extrabold">
-              {pieceMeta.symbol} {localizedPiece.name}
+
+            <span className="px-3 py-1.5 rounded-xl bg-sky-100 text-sky-800 text-xs font-black">
+              {activeConcreteMeta.emoji} {activeConcreteMeta.name}
             </span>
+
+            {activeConcreteMode === "CHESS" && (
+              <span className="px-3 py-1.5 rounded-xl bg-amber-100 text-amber-800 text-xs font-extrabold">
+                {pieceMeta.symbol} {localizedPiece.name}
+              </span>
+            )}
+
             {currentQ.allow_multiple && (
               <span className="px-3 py-1.5 rounded-xl bg-purple-100 text-purple-800 text-xs font-black">
                 {lang === "EN" ? "Multiple Answers" : "Jawaban Ganda"}
@@ -1244,6 +1292,12 @@ export default function HostRoomPage() {
         ? inspectedQuestion.correct_options
         : [inspectedQuestion.correct_option];
 
+    const inspectedConcreteMode = resolveConcreteGameMode(
+      sessionSettings.game_mode,
+      inspectedQuestion.id,
+    );
+    const inspectedModeMeta = GAME_MODES_META[inspectedConcreteMode];
+
     const pieceMeta =
       PIECE_META[inspectedQuestion.piece_type] || PIECE_META.KNIGHT;
     const localizedPiece =
@@ -1455,15 +1509,20 @@ export default function HostRoomPage() {
         </div>
 
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-slate-100">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <span className="px-3 py-1 rounded-xl bg-slate-800 text-white text-xs font-black">
               {lang === "EN"
                 ? `Question #${selectedQuestionIdx + 1}`
                 : `Soal #${selectedQuestionIdx + 1}`}
             </span>
-            <span className="px-3 py-1 rounded-xl bg-amber-100 text-amber-800 text-xs font-extrabold">
-              {pieceMeta.symbol} {localizedPiece.name}
+            <span className="px-3 py-1 rounded-xl bg-sky-100 text-sky-800 text-xs font-black">
+              {inspectedModeMeta.emoji} {inspectedModeMeta.name}
             </span>
+            {inspectedConcreteMode === "CHESS" && (
+              <span className="px-3 py-1 rounded-xl bg-amber-100 text-amber-800 text-xs font-extrabold">
+                {pieceMeta.symbol} {localizedPiece.name}
+              </span>
+            )}
           </div>
 
           {focusedStudent ? (
@@ -1653,21 +1712,27 @@ export default function HostRoomPage() {
     <main className="min-h-screen bg-[#F2F7FC] text-slate-800 pb-12">
       <header className="bg-white border-b-2 border-slate-200/80 sticky top-0 z-20">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 h-20 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#3B9EFF] to-[#1D7AFC] text-white flex items-center justify-center text-2xl shadow-sm border-b-4 border-[#135BC4]">
-              ♞
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#3B9EFF] to-[#1D7AFC] text-white flex items-center justify-center text-2xl shadow-sm border-b-4 border-[#135BC4] shrink-0">
+              {selectedModeMeta.emoji}
             </div>
-            <div>
+            <div className="min-w-0">
               <span className="font-black text-xl tracking-tight text-slate-800 block leading-none">
                 Tacti<span className="text-[#2589FF]">Quiz</span> Live
               </span>
-              <span className="text-xs font-bold text-slate-400">
+              <span className="text-xs font-bold text-slate-400 truncate block mt-0.5">
                 {quizTitle} • {questions.length} {t("questionsCount")}
               </span>
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5 sm:gap-3">
+          <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+            {/* Badge Mode Arena Aktif */}
+            <span className="hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-2xl bg-indigo-50 border-2 border-indigo-200 text-indigo-800 font-black text-xs">
+              <span>{selectedModeMeta.emoji}</span>
+              <span>{selectedModeMeta.name}</span>
+            </span>
+
             {/* Tombol Mute / Unmute Audio */}
             <button
               type="button"
@@ -1794,67 +1859,78 @@ export default function HostRoomPage() {
               </button>
             </div>
 
-            <div className="lg:col-span-7 bg-white p-6 rounded-[32px] border-2 border-slate-200/90 border-b-[6px] min-h-[360px]">
-              <div className="flex items-center justify-between mb-5">
-                <h2 className="text-xl font-black text-slate-800">
-                  {t("waitingRoomTitle")}
-                </h2>
-                <span className="text-xs font-extrabold text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200 animate-pulse">
-                  {lang === "EN"
-                    ? "● Waiting for players..."
-                    : "● Menunggu pemain..."}
-                </span>
+            <div className="lg:col-span-7 flex flex-col gap-6">
+              {/* Pemilih 10 Mode Taktis + Mix Mode di Lobby */}
+              <div className="bg-white p-6 rounded-[32px] border-2 border-slate-200/90 border-b-[6px]">
+                <GameModeSelector
+                  value={sessionSettings.game_mode}
+                  onChange={handleChangeGameMode}
+                />
               </div>
 
-              {players.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-16 text-center text-slate-400">
-                  <div className="text-5xl mb-3">🦉</div>
-                  <p className="font-extrabold text-base text-slate-600">
+              {/* Daftar Siswa di Ruang Tunggu */}
+              <div className="bg-white p-6 rounded-[32px] border-2 border-slate-200/90 border-b-[6px] min-h-[280px]">
+                <div className="flex items-center justify-between mb-5">
+                  <h2 className="text-xl font-black text-slate-800">
+                    {t("waitingRoomTitle")}
+                  </h2>
+                  <span className="text-xs font-extrabold text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200 animate-pulse">
                     {lang === "EN"
-                      ? "No students have joined yet"
-                      : "Belum ada siswa yang masuk"}
-                  </p>
-                  <p className="text-xs font-medium mt-1">
-                    {lang === "EN" ? (
-                      <>
-                        Share PIN code <strong>{room.pin_code}</strong> with
-                        students to join.
-                      </>
-                    ) : (
-                      <>
-                        Bagikan kode PIN <strong>{room.pin_code}</strong> kepada
-                        siswa untuk mulai bergabung.
-                      </>
-                    )}
-                  </p>
+                      ? "● Waiting for players..."
+                      : "● Menunggu pemain..."}
+                  </span>
                 </div>
-              ) : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                  <AnimatePresence>
-                    {players.map((p) => {
-                      const meta =
-                        PIECE_META[p.piece_skin] || PIECE_META.KNIGHT;
-                      return (
-                        <motion.div
-                          key={p.id}
-                          initial={{ scale: 0.7, opacity: 0 }}
-                          animate={{ scale: 1, opacity: 1 }}
-                          className="flex items-center gap-3 p-3 rounded-2xl bg-[#F8FBFF] border-2 border-sky-100 border-b-4 shadow-xs"
-                        >
-                          <div
-                            className={`w-10 h-10 rounded-xl ${meta.badgeColor} text-white flex items-center justify-center text-2xl shrink-0`}
+
+                {players.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-12 text-center text-slate-400">
+                    <div className="text-5xl mb-3">🦉</div>
+                    <p className="font-extrabold text-base text-slate-600">
+                      {lang === "EN"
+                        ? "No students have joined yet"
+                        : "Belum ada siswa yang masuk"}
+                    </p>
+                    <p className="text-xs font-medium mt-1">
+                      {lang === "EN" ? (
+                        <>
+                          Share PIN code <strong>{room.pin_code}</strong> with
+                          students to join.
+                        </>
+                      ) : (
+                        <>
+                          Bagikan kode PIN <strong>{room.pin_code}</strong>{" "}
+                          kepada siswa untuk mulai bergabung.
+                        </>
+                      )}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    <AnimatePresence>
+                      {players.map((p) => {
+                        const meta =
+                          PIECE_META[p.piece_skin] || PIECE_META.KNIGHT;
+                        return (
+                          <motion.div
+                            key={p.id}
+                            initial={{ scale: 0.7, opacity: 0 }}
+                            animate={{ scale: 1, opacity: 1 }}
+                            className="flex items-center gap-3 p-3 rounded-2xl bg-[#F8FBFF] border-2 border-sky-100 border-b-4 shadow-xs"
                           >
-                            {meta.symbol}
-                          </div>
-                          <span className="font-extrabold text-sm text-slate-800 truncate">
-                            {p.nickname}
-                          </span>
-                        </motion.div>
-                      );
-                    })}
-                  </AnimatePresence>
-                </div>
-              )}
+                            <div
+                              className={`w-10 h-10 rounded-xl ${meta.badgeColor} text-white flex items-center justify-center text-2xl shrink-0`}
+                            >
+                              {meta.symbol}
+                            </div>
+                            <span className="font-extrabold text-sm text-slate-800 truncate">
+                              {p.nickname}
+                            </span>
+                          </motion.div>
+                        );
+                      })}
+                    </AnimatePresence>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -1895,50 +1971,78 @@ export default function HostRoomPage() {
               )
             ) : (
               <>
-                <div className="bg-white p-5 rounded-[28px] border-2 border-slate-200/90 border-b-[6px] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div>
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 text-emerald-700 font-black text-xs animate-pulse">
-                        {lang === "EN"
-                          ? "● Self-Paced Live Session"
-                          : "● Sesi Berlangsung Mandiri"}
-                      </span>
-                      <span className="px-3 py-1 rounded-full bg-sky-100 text-sky-700 font-black text-xs">
-                        {finishedCount}/{players.length}{" "}
-                        {lang === "EN" ? "Completed" : "Siswa Selesai"}
-                      </span>
+                <div className="bg-white p-5 rounded-[28px] border-2 border-slate-200/90 border-b-[6px] flex flex-col gap-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2 mb-1">
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 text-emerald-700 font-black text-xs animate-pulse">
+                          {lang === "EN"
+                            ? "● Self-Paced Live Session"
+                            : "● Sesi Berlangsung Mandiri"}
+                        </span>
+                        <span className="px-3 py-1 rounded-full bg-sky-100 text-sky-700 font-black text-xs">
+                          {finishedCount}/{players.length}{" "}
+                          {lang === "EN" ? "Completed" : "Siswa Selesai"}
+                        </span>
+                      </div>
+                      <h2 className="text-lg sm:text-xl font-black text-slate-800">
+                        {t("liveMonitorTitle")}
+                      </h2>
                     </div>
-                    <h2 className="text-lg sm:text-xl font-black text-slate-800">
-                      {t("liveMonitorTitle")}
-                    </h2>
+
+                    <div className="flex flex-wrap items-center gap-2 self-start">
+                      <button
+                        type="button"
+                        onClick={() => setShowLiveModeDrawer((prev) => !prev)}
+                        className={`flex items-center gap-1.5 px-3.5 py-2.5 rounded-2xl text-xs sm:text-sm font-black border-2 transition cursor-pointer ${
+                          showLiveModeDrawer
+                            ? "bg-indigo-600 text-white border-indigo-700"
+                            : "bg-indigo-50 text-indigo-800 border-indigo-200 hover:bg-indigo-100"
+                        }`}
+                      >
+                        <SlidersHorizontal className="w-4 h-4" />
+                        <span>
+                          {selectedModeMeta.emoji} {selectedModeMeta.name}
+                        </span>
+                      </button>
+
+                      <div className="flex items-center gap-1.5 bg-[#F2F7FC] p-1.5 rounded-2xl border-2 border-slate-200">
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab("LEADERBOARD")}
+                          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-black transition cursor-pointer ${
+                            activeTab === "LEADERBOARD"
+                              ? "bg-[#2B90FF] text-white shadow-xs"
+                              : "text-slate-600 hover:text-slate-900"
+                          }`}
+                        >
+                          <Trophy className="w-4 h-4" />
+                          <span>{t("tabLeaderboard")}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveTab("QUESTIONS")}
+                          className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-black transition cursor-pointer ${
+                            activeTab === "QUESTIONS"
+                              ? "bg-[#2B90FF] text-white shadow-xs"
+                              : "text-slate-600 hover:text-slate-900"
+                          }`}
+                        >
+                          <ListChecks className="w-4 h-4" />
+                          <span>{t("tabQuestions")}</span>
+                        </button>
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="flex items-center gap-1.5 bg-[#F2F7FC] p-1.5 rounded-2xl border-2 border-slate-200 self-start">
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab("LEADERBOARD")}
-                      className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-black transition cursor-pointer ${
-                        activeTab === "LEADERBOARD"
-                          ? "bg-[#2B90FF] text-white shadow-xs"
-                          : "text-slate-600 hover:text-slate-900"
-                      }`}
-                    >
-                      <Trophy className="w-4 h-4" />
-                      <span>{t("tabLeaderboard")}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveTab("QUESTIONS")}
-                      className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs sm:text-sm font-black transition cursor-pointer ${
-                        activeTab === "QUESTIONS"
-                          ? "bg-[#2B90FF] text-white shadow-xs"
-                          : "text-slate-600 hover:text-slate-900"
-                      }`}
-                    >
-                      <ListChecks className="w-4 h-4" />
-                      <span>{t("tabQuestions")}</span>
-                    </button>
-                  </div>
+                  {showLiveModeDrawer && (
+                    <div className="pt-4 border-t border-slate-100">
+                      <GameModeSelector
+                        value={sessionSettings.game_mode}
+                        onChange={handleChangeGameMode}
+                      />
+                    </div>
+                  )}
                 </div>
 
                 {activeTab === "LEADERBOARD"

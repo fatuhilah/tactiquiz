@@ -1,20 +1,20 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { Footprints, Eye, EyeOff, Sparkles } from "lucide-react";
-import { sound } from "@/lib/sound";
+import React, { useState, useMemo, useEffect } from "react";
+import { motion } from "framer-motion";
+import { CheckCircle2, XCircle, Sparkles, Send, Check } from "lucide-react";
 import { useLanguage } from "@/components/LanguageProvider";
 import { PIECE_META_I18N } from "@/lib/i18n";
+import { sound } from "@/lib/sound";
 
+export type OptionKey = "A" | "B" | "C" | "D";
 export type PieceType =
-  | "PAWN"
   | "KNIGHT"
   | "BISHOP"
   | "ROOK"
   | "QUEEN"
-  | "KING";
-export type OptionKey = "A" | "B" | "C" | "D";
+  | "KING"
+  | "PAWN";
 
 export interface QuestionData {
   id: string;
@@ -24,67 +24,63 @@ export interface QuestionData {
   correct_option: OptionKey;
   correct_options?: OptionKey[];
   allow_multiple?: boolean;
-  time_limit?: number;
+  time_limit: number;
   piece_type: PieceType;
-  obstacles?: number;
-}
-
-interface Position {
-  row: number;
-  col: number;
-}
-
-interface ChessQuizBoardProps {
-  question: QuestionData;
-  activePiece?: PieceType;
-  eliminatedOptions?: OptionKey[];
-  disabled?: boolean;
-  onAnswer: (
-    selectedOption: OptionKey,
-    isCorrect: boolean,
-    movesUsed: number,
-  ) => void;
+  obstacles: number;
 }
 
 export const PIECE_META: Record<
   PieceType,
-  { symbol: string; name: string; hint: string; badgeColor: string }
+  {
+    name: string;
+    symbol: string;
+    badgeColor: string;
+    moveDesc: string;
+    moveDescEn: string;
+  }
 > = {
-  PAWN: {
-    symbol: "♟",
-    name: "Pion Cilik",
-    hint: "Jalan 1 kotak lurus, tangkap jawaban 1 kotak serong!",
-    badgeColor: "bg-emerald-500",
-  },
   KNIGHT: {
+    name: "Knight (Kuda)",
     symbol: "♞",
-    name: "Kuda Lompat",
-    hint: "Melompat bentuk huruf L (bisa melompati balok)!",
-    badgeColor: "bg-amber-500",
+    badgeColor: "bg-indigo-500",
+    moveDesc: "Melangkah bentuk huruf L & bisa melompati rintangan",
+    moveDescEn: "Moves in an L-shape and can jump over obstacles",
   },
   BISHOP: {
+    name: "Bishop (Gajah)",
     symbol: "♝",
-    name: "Gajah Peluncur",
-    hint: "Meluncur miring diagonal ke arah jawaban!",
-    badgeColor: "bg-sky-500",
+    badgeColor: "bg-emerald-500",
+    moveDesc: "Meluncur diagonal bebas ke segala arah",
+    moveDescEn: "Slides diagonally in any direction",
   },
   ROOK: {
+    name: "Rook (Benteng)",
     symbol: "♜",
-    name: "Benteng Kokoh",
-    hint: "Meluncur lurus ke atas, bawah, kiri, atau kanan!",
-    badgeColor: "bg-indigo-500",
+    badgeColor: "bg-amber-500",
+    moveDesc: "Meluncur lurus vertikal & horizontal",
+    moveDescEn: "Slides straight vertically & horizontally",
   },
   QUEEN: {
+    name: "Queen (Ratu)",
     symbol: "♛",
-    name: "Ratu Super",
-    hint: "Bebas meluncur lurus maupun miring ke mana saja!",
     badgeColor: "bg-purple-500",
+    moveDesc: "Kombinasi Benteng & Gajah (8 arah bebas)",
+    moveDescEn: "Combines Rook & Bishop (all 8 directions)",
   },
   KING: {
+    name: "King (Raja)",
     symbol: "♚",
-    name: "Raja Bijak",
-    hint: "Melangkah santai 1 kotak ke segala arah!",
     badgeColor: "bg-rose-500",
+    moveDesc: "Melangkah 1 petak ke segala arah",
+    moveDescEn: "Moves 1 square in any direction",
+  },
+  PAWN: {
+    name: "Pawn (Pion)",
+    symbol: "♟",
+    badgeColor: "bg-sky-500",
+    moveDesc: "Jalan 1 petak lurus (kotak kosong), makan opsi 1 petak diagonal",
+    moveDescEn:
+      "Walks 1 square straight (empty), captures options 1 square diagonally",
   },
 };
 
@@ -94,245 +90,401 @@ export const OPTION_STYLES: Record<
     badgeBg: string;
     cardBg: string;
     cardBorder: string;
-    tokenBg: string;
-    tokenBorder: string;
   }
 > = {
   A: {
-    badgeBg: "bg-[#FF5A79]",
-    cardBg: "bg-white hover:bg-rose-50/70",
-    cardBorder: "border-rose-200 border-b-rose-300",
-    tokenBg: "from-[#FF6B88] to-[#FF4769]",
-    tokenBorder: "border-b-[#D62E4E]",
+    badgeBg: "bg-[#2B90FF]",
+    cardBg: "bg-[#F0F7FF]",
+    cardBorder: "border-[#BAE0FF] border-b-[#91CAFF]",
   },
   B: {
-    badgeBg: "bg-[#2B95FF]",
-    cardBg: "bg-white hover:bg-sky-50/70",
-    cardBorder: "border-sky-200 border-b-sky-300",
-    tokenBg: "from-[#47A6FF] to-[#1E82F5]",
-    tokenBorder: "border-b-[#1262C4]",
+    badgeBg: "bg-[#22C55E]",
+    cardBg: "bg-[#F0FDF4]",
+    cardBorder: "border-[#BBF7D0] border-b-[#86EFAC]",
   },
   C: {
-    badgeBg: "bg-[#FFAE19]",
-    cardBg: "bg-white hover:bg-amber-50/70",
-    cardBorder: "border-amber-200 border-b-amber-300",
-    tokenBg: "from-[#FFC13B] to-[#F59E0B]",
-    tokenBorder: "border-b-[#C77700]",
+    badgeBg: "bg-[#FF9800]",
+    cardBg: "bg-[#FFF8EB]",
+    cardBorder: "border-[#FDE68A] border-b-[#FCD34D]",
   },
   D: {
-    badgeBg: "bg-[#22C55E]",
-    cardBg: "bg-white hover:bg-emerald-50/70",
-    cardBorder: "border-emerald-200 border-b-emerald-300",
-    tokenBg: "from-[#34D374] to-[#16A34A]",
-    tokenBorder: "border-b-[#117A37]",
+    badgeBg: "bg-[#8B5CF6]",
+    cardBg: "bg-[#F5F3FF]",
+    cardBorder: "border-[#DDD6FE] border-b-[#C4B5FD]",
   },
 };
 
+interface ChessQuizBoardProps {
+  question: QuestionData;
+  activePiece: PieceType;
+  eliminatedOptions?: OptionKey[];
+  disabled?: boolean;
+  onAnswer: (
+    selected: OptionKey,
+    isCorrect: boolean,
+    movesUsed: number,
+  ) => void;
+}
+
+interface Coord {
+  r: number;
+  c: number;
+}
+
 const BOARD_SIZE = 6;
-const COL_LABELS = ["A", "B", "C", "D", "E", "F"];
+const START_POS: Coord = { r: 5, c: 0 };
 
-function isSamePos(a: Position, b: Position) {
-  return a.row === b.row && a.col === b.col;
+function coordKey(r: number, c: number): string {
+  return `${r},${c}`;
 }
 
-function inBounds(r: number, c: number) {
-  return r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE;
-}
+function parseBoardOptionKeys(
+  rawList: unknown,
+  fallbackSingle?: unknown,
+): OptionKey[] {
+  const validSet = new Set<OptionKey>(["A", "B", "C", "D"]);
+  let candidates: unknown[] = [];
 
-function getSingleStepMoves(
-  pos: Position,
-  piece: PieceType,
-  obstacles: Position[],
-  targetPositions: Position[],
-): Position[] {
-  const valid: Position[] = [];
-  const hasObstacle = (r: number, c: number) =>
-    obstacles.some((o) => o.row === r && o.col === c);
-  const hasTarget = (r: number, c: number) =>
-    targetPositions.some((t) => t.row === r && t.col === c);
-
-  if (piece === "PAWN") {
-    const stepDirs = [
-      [-1, 0],
-      [1, 0],
-      [0, -1],
-      [0, 1],
-    ];
-    stepDirs.forEach(([dr, dc]) => {
-      const r = pos.row + dr;
-      const c = pos.col + dc;
-      if (inBounds(r, c) && !hasObstacle(r, c) && !hasTarget(r, c)) {
-        valid.push({ row: r, col: c });
+  if (Array.isArray(rawList)) {
+    candidates = rawList;
+  } else if (typeof rawList === "string" && rawList.trim()) {
+    const trimmed = rawList.trim();
+    if (trimmed.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) candidates = parsed;
+      } catch {
+        // abaikan
       }
-    });
-    const captureDirs = [
-      [-1, -1],
-      [-1, 1],
-      [1, -1],
-      [1, 1],
-    ];
-    captureDirs.forEach(([dr, dc]) => {
-      const r = pos.row + dr;
-      const c = pos.col + dc;
-      if (inBounds(r, c) && !hasObstacle(r, c) && hasTarget(r, c)) {
-        valid.push({ row: r, col: c });
-      }
-    });
-    return valid;
+    } else {
+      candidates = trimmed.replace(/[{}"]/g, "").split(",");
+    }
   }
 
-  if (piece === "KING") {
-    for (let dr = -1; dr <= 1; dr++) {
-      for (let dc = -1; dc <= 1; dc++) {
-        if (dr === 0 && dc === 0) continue;
-        const r = pos.row + dr;
-        const c = pos.col + dc;
-        if (inBounds(r, c) && !hasObstacle(r, c)) {
-          valid.push({ row: r, col: c });
+  if (candidates.length === 0 && typeof fallbackSingle === "string") {
+    candidates = fallbackSingle.replace(/[{}"]/g, "").split(",");
+  }
+
+  const normalized = candidates
+    .map((item) => String(item).trim().toUpperCase() as OptionKey)
+    .filter((k) => validSet.has(k));
+
+  return normalized.length > 0 ? Array.from(new Set(normalized)) : ["A"];
+}
+
+function getValidMoves(
+  pos: Coord,
+  piece: PieceType,
+  obstacles: Set<string>,
+  activeTokens: Set<string>,
+): Set<string> {
+  const valid = new Set<string>();
+  const inBounds = (r: number, c: number) =>
+    r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE;
+
+  const addSlideRays = (dirs: [number, number][]) => {
+    for (const [dr, dc] of dirs) {
+      let nr = pos.r + dr;
+      let nc = pos.c + dc;
+      while (inBounds(nr, nc)) {
+        const k = coordKey(nr, nc);
+        if (obstacles.has(k)) break;
+        valid.add(k);
+        // Berhenti di opsi pertama agar bidak tidak menembus ke belakangnya
+        if (activeTokens.has(k)) break;
+        nr += dr;
+        nc += dc;
+      }
+    }
+  };
+
+  switch (piece) {
+    case "KNIGHT": {
+      const jumps: [number, number][] = [
+        [-2, -1],
+        [-2, 1],
+        [-1, -2],
+        [-1, 2],
+        [1, -2],
+        [1, 2],
+        [2, -1],
+        [2, 1],
+      ];
+      for (const [dr, dc] of jumps) {
+        const nr = pos.r + dr;
+        const nc = pos.c + dc;
+        const k = coordKey(nr, nc);
+        if (inBounds(nr, nc) && !obstacles.has(k)) {
+          valid.add(k);
         }
       }
+      break;
     }
-    return valid;
-  }
-
-  if (piece === "KNIGHT") {
-    const jumps = [
-      [-2, -1],
-      [-2, 1],
-      [-1, -2],
-      [-1, 2],
-      [1, -2],
-      [1, 2],
-      [2, -1],
-      [2, 1],
-    ];
-    jumps.forEach(([dr, dc]) => {
-      const r = pos.row + dr;
-      const c = pos.col + dc;
-      if (inBounds(r, c) && !hasObstacle(r, c)) {
-        valid.push({ row: r, col: c });
+    case "BISHOP":
+      addSlideRays([
+        [-1, -1],
+        [-1, 1],
+        [1, -1],
+        [1, 1],
+      ]);
+      break;
+    case "ROOK":
+      addSlideRays([
+        [-1, 0],
+        [1, 0],
+        [0, -1],
+        [0, 1],
+      ]);
+      break;
+    case "QUEEN":
+      addSlideRays([
+        [-1, -1],
+        [-1, 1],
+        [1, -1],
+        [1, 1],
+        [-1, 0],
+        [1, 0],
+        [0, -1],
+        [0, 1],
+      ]);
+      break;
+    case "KING": {
+      for (let dr = -1; dr <= 1; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
+          if (dr === 0 && dc === 0) continue;
+          const nr = pos.r + dr;
+          const nc = pos.c + dc;
+          const k = coordKey(nr, nc);
+          if (inBounds(nr, nc) && !obstacles.has(k)) {
+            valid.add(k);
+          }
+        }
       }
-    });
-    return valid;
-  }
-
-  const directions: [number, number][] = [];
-  if (piece === "ROOK" || piece === "QUEEN") {
-    directions.push([-1, 0], [1, 0], [0, -1], [0, 1]);
-  }
-  if (piece === "BISHOP" || piece === "QUEEN") {
-    directions.push([-1, -1], [-1, 1], [1, -1], [1, 1]);
-  }
-
-  directions.forEach(([dr, dc]) => {
-    let r = pos.row + dr;
-    let c = pos.col + dc;
-    while (inBounds(r, c)) {
-      if (hasObstacle(r, c)) break;
-      valid.push({ row: r, col: c });
-      if (hasTarget(r, c)) break;
-      r += dr;
-      c += dc;
+      break;
     }
-  });
+    case "PAWN": {
+      // 1. Jalan lurus 1 petak (HANYA ke petak kosong, tidak boleh menabrak opsi)
+      const walkSteps: [number, number][] = [
+        [-1, 0],
+        [1, 0],
+        [0, -1],
+        [0, 1],
+      ];
+      for (const [dr, dc] of walkSteps) {
+        const nr = pos.r + dr;
+        const nc = pos.c + dc;
+        const k = coordKey(nr, nc);
+        if (inBounds(nr, nc) && !obstacles.has(k) && !activeTokens.has(k)) {
+          valid.add(k);
+        }
+      }
+
+      // 2. Makan / tangkap opsi jawaban secara diagonal (HANYA jika ada opsi aktif di diagonal)
+      const captureSteps: [number, number][] = [
+        [-1, -1],
+        [-1, 1],
+        [1, -1],
+        [1, 1],
+      ];
+      for (const [dr, dc] of captureSteps) {
+        const nr = pos.r + dr;
+        const nc = pos.c + dc;
+        const k = coordKey(nr, nc);
+        if (inBounds(nr, nc) && !obstacles.has(k) && activeTokens.has(k)) {
+          valid.add(k);
+        }
+      }
+      break;
+    }
+  }
 
   return valid;
 }
 
-function generateTacticalBoard(piece: PieceType, desiredObstacles: number) {
-  const optionKeys: OptionKey[] = ["A", "B", "C", "D"];
+// Mengecek apakah satu target opsi tertentu benar-benar bisa dicapai tanpa terpaksa menginjak 3 opsi lainnya
+function canReachSingleTarget(
+  pieceType: PieceType,
+  targetCoord: Coord,
+  otherTokenCoords: Set<string>,
+  obstacles: Set<string>,
+): boolean {
+  const targetKey = coordKey(targetCoord.r, targetCoord.c);
+  const startKey = coordKey(START_POS.r, START_POS.c);
 
-  for (let attempt = 0; attempt < 30; attempt++) {
-    const obsCount = attempt < 20 ? desiredObstacles : 0;
-    const startPos: Position = {
-      row: Math.floor(Math.random() * (BOARD_SIZE - 2)) + 1,
-      col: Math.floor(Math.random() * (BOARD_SIZE - 2)) + 1,
-    };
+  // Gabungkan tembok bata + 3 opsi lain sebagai penghalang mutlak
+  const combinedBlockers = new Set<string>(obstacles);
+  otherTokenCoords.forEach((k) => combinedBlockers.add(k));
 
-    const obstacles: Position[] = [];
-    while (obstacles.length < obsCount) {
-      const candidate = {
-        row: Math.floor(Math.random() * BOARD_SIZE),
-        col: Math.floor(Math.random() * BOARD_SIZE),
-      };
-      if (
-        !isSamePos(candidate, startPos) &&
-        !obstacles.some((o) => isSamePos(o, candidate))
-      ) {
-        obstacles.push(candidate);
+  if (combinedBlockers.has(startKey) || combinedBlockers.has(targetKey)) {
+    return false;
+  }
+
+  // Khusus Pion: pastikan setelah menangkap target, pion punya minimal 1 petak kosong lurus untuk keluar (penting untuk Multiple Answers)
+  if (pieceType === "PAWN") {
+    const hasExit = [
+      [-1, 0],
+      [1, 0],
+      [0, -1],
+      [0, 1],
+    ].some(([dr, dc]) => {
+      const nr = targetCoord.r + dr;
+      const nc = targetCoord.c + dc;
+      return (
+        nr >= 0 &&
+        nr < BOARD_SIZE &&
+        nc >= 0 &&
+        nc < BOARD_SIZE &&
+        !combinedBlockers.has(coordKey(nr, nc))
+      );
+    });
+    if (!hasExit) return false;
+  }
+
+  const visited = new Set<string>([startKey]);
+  const queue: Coord[] = [START_POS];
+  const onlyTargetSet = new Set<string>([targetKey]);
+
+  while (queue.length > 0) {
+    const curr = queue.shift()!;
+    const currKey = coordKey(curr.r, curr.c);
+    if (currKey === targetKey) return true;
+
+    const moves = getValidMoves(
+      curr,
+      pieceType,
+      combinedBlockers,
+      onlyTargetSet,
+    );
+    for (const nextKey of moves) {
+      if (nextKey === targetKey) return true;
+      if (!visited.has(nextKey)) {
+        visited.add(nextKey);
+        const [rStr, cStr] = nextKey.split(",");
+        queue.push({ r: Number(rStr), c: Number(cStr) });
       }
-    }
-
-    const placedTargets: Partial<Record<OptionKey, Position>> = {};
-    let allPlaced = true;
-
-    for (const key of optionKeys) {
-      const currentTargetsList = Object.values(placedTargets) as Position[];
-      const visited = new Set<string>([`${startPos.row},${startPos.col}`]);
-      const queue: { pos: Position; dist: number }[] = [
-        { pos: startPos, dist: 0 },
-      ];
-      const candidates: { pos: Position; dist: number }[] = [];
-
-      while (queue.length > 0) {
-        const { pos, dist } = queue.shift()!;
-        if (dist >= 3) continue;
-
-        const moves = getSingleStepMoves(
-          pos,
-          piece,
-          obstacles,
-          currentTargetsList,
-        );
-        for (const m of moves) {
-          const id = `${m.row},${m.col}`;
-          const hitsExistingTarget = currentTargetsList.some((t) =>
-            isSamePos(t, m),
-          );
-          if (hitsExistingTarget) continue;
-
-          if (!visited.has(id)) {
-            visited.add(id);
-            const isDiagonalStep = m.row !== pos.row && m.col !== pos.col;
-            if (piece !== "PAWN" || isDiagonalStep) {
-              candidates.push({ pos: m, dist: dist + 1 });
-            }
-            if (piece !== "PAWN" || !isDiagonalStep) {
-              queue.push({ pos: m, dist: dist + 1 });
-            }
-          }
-        }
-      }
-
-      if (candidates.length === 0) {
-        allPlaced = false;
-        break;
-      }
-
-      const weighted = candidates.flatMap((c) => (c.dist <= 2 ? [c, c] : [c]));
-      const chosen = weighted[Math.floor(Math.random() * weighted.length)];
-      placedTargets[key] = chosen.pos;
-    }
-
-    if (allPlaced) {
-      return {
-        startPos,
-        obstacles,
-        targets: placedTargets as Record<OptionKey, Position>,
-      };
     }
   }
 
-  return {
-    startPos: { row: 2, col: 2 },
-    obstacles: [],
-    targets: {
-      A: { row: 1, col: 1 },
-      B: { row: 1, col: 3 },
-      C: { row: 3, col: 1 },
-      D: { row: 3, col: 3 },
-    },
-  };
+  return false;
+}
+
+function isLayoutPlayable(
+  pieceType: PieceType,
+  tokens: Record<OptionKey, Coord>,
+  obstacles: Set<string>,
+): boolean {
+  const keys: OptionKey[] = ["A", "B", "C", "D"];
+  return keys.every((targetOpt) => {
+    const others = new Set<string>();
+    keys.forEach((k) => {
+      if (k !== targetOpt) {
+        others.add(coordKey(tokens[k].r, tokens[k].c));
+      }
+    });
+    const reachableByBase = canReachSingleTarget(
+      pieceType,
+      tokens[targetOpt],
+      others,
+      obstacles,
+    );
+    const reachableByQueen =
+      pieceType === "QUEEN"
+        ? reachableByBase
+        : canReachSingleTarget("QUEEN", tokens[targetOpt], others, obstacles);
+
+    return reachableByBase && reachableByQueen;
+  });
+}
+
+function generateBoardLayout(
+  pieceType: PieceType,
+  obstacleCount: number,
+): {
+  tokens: Record<OptionKey, Coord>;
+  obstacles: Set<string>;
+} {
+  const startParity = (START_POS.r + START_POS.c) % 2;
+  const candidateCells: Coord[] = [];
+
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    for (let c = 0; c < BOARD_SIZE; c++) {
+      if (r === START_POS.r && c === START_POS.c) continue;
+      if (pieceType === "BISHOP") {
+        if ((r + c) % 2 !== startParity) continue;
+        // Jangan taruh opsi tepat di (4, 1) karena itu satu-satunya pintu keluar Gajah dari (5, 0)
+        if (r === 4 && c === 1) continue;
+      }
+      candidateCells.push({ r, c });
+    }
+  }
+
+  const optionKeys: OptionKey[] = ["A", "B", "C", "D"];
+  const clampedObstacles = Math.max(0, Math.min(5, obstacleCount || 0));
+
+  // Coba hingga 150 kombinasi acak yang lolos uji BFS 4 arah independen
+  for (let attempt = 0; attempt < 150; attempt++) {
+    const shuffled = [...candidateCells].sort(() => Math.random() - 0.5);
+    const tokens = {} as Record<OptionKey, Coord>;
+    const occupied = new Set<string>([coordKey(START_POS.r, START_POS.c)]);
+
+    optionKeys.forEach((key, idx) => {
+      const cell = shuffled[idx] || { r: 0, c: idx + 1 };
+      tokens[key] = cell;
+      occupied.add(coordKey(cell.r, cell.c));
+    });
+
+    // Pastikan tanpa rintangan pun keempat opsi sudah bebas dicapai tanpa saling mengunci
+    if (!isLayoutPlayable(pieceType, tokens, new Set())) {
+      continue;
+    }
+
+    const freeForObstacles: Coord[] = [];
+    for (let r = 0; r < BOARD_SIZE; r++) {
+      for (let c = 0; c < BOARD_SIZE; c++) {
+        const k = coordKey(r, c);
+        if (!occupied.has(k)) {
+          if (Math.abs(r - START_POS.r) <= 1 && Math.abs(c - START_POS.c) <= 1)
+            continue;
+          freeForObstacles.push({ r, c });
+        }
+      }
+    }
+
+    const shuffledFree = [...freeForObstacles].sort(() => Math.random() - 0.5);
+    const obstacles = new Set<string>();
+
+    for (const candidate of shuffledFree) {
+      if (obstacles.size >= clampedObstacles) break;
+      const key = coordKey(candidate.r, candidate.c);
+      obstacles.add(key);
+
+      if (!isLayoutPlayable(pieceType, tokens, obstacles)) {
+        obstacles.delete(key);
+      }
+    }
+
+    if (isLayoutPlayable(pieceType, tokens, obstacles)) {
+      return { tokens, obstacles };
+    }
+  }
+
+  // Fallback aman 100% terjamin jika seluruh percobaan acak gagal
+  const fallbackTokens: Record<OptionKey, Coord> =
+    pieceType === "BISHOP"
+      ? {
+          A: { r: 1, c: 0 },
+          B: { r: 0, c: 3 },
+          C: { r: 2, c: 5 },
+          D: { r: 5, c: 4 },
+        }
+      : {
+          A: { r: 1, c: 1 },
+          B: { r: 1, c: 4 },
+          C: { r: 4, c: 1 },
+          D: { r: 4, c: 4 },
+        };
+
+  return { tokens: fallbackTokens, obstacles: new Set() };
 }
 
 export default function ChessQuizBoard({
@@ -342,267 +494,376 @@ export default function ChessQuizBoard({
   disabled = false,
   onAnswer,
 }: ChessQuizBoardProps) {
-  const { lang, t } = useLanguage();
+  const { lang } = useLanguage();
 
-  const basePiece: PieceType =
-    question?.piece_type && PIECE_META[question.piece_type]
-      ? question.piece_type
-      : "KNIGHT";
+  const validCorrectKeys: OptionKey[] = useMemo(
+    () =>
+      parseBoardOptionKeys(question.correct_options, question.correct_option),
+    [question.correct_options, question.correct_option],
+  );
 
-  const resolvedPiece: PieceType =
-    activePiece && PIECE_META[activePiece] ? activePiece : basePiece;
+  const isMultiple =
+    Boolean(question.allow_multiple) || validCorrectKeys.length > 1;
 
-  const pieceInfo = PIECE_META[resolvedPiece];
-  const localizedPiece = PIECE_META_I18N?.[lang]?.[resolvedPiece] || pieceInfo;
+  const { tokens, obstacles } = useMemo(
+    () => generateBoardLayout(question.piece_type, question.obstacles),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [question.id],
+  );
 
-  const validCorrectOptions: OptionKey[] = useMemo(() => {
-    return question?.correct_options && question.correct_options.length > 0
-      ? question.correct_options
-      : [question.correct_option];
-  }, [question]);
-
-  const [playerPos, setPlayerPos] = useState<Position>({ row: 2, col: 2 });
-  const [obstacles, setObstacles] = useState<Position[]>([]);
-  const [targets, setTargets] = useState<Record<OptionKey, Position>>({
-    A: { row: 0, col: 0 },
-    B: { row: 0, col: 5 },
-    C: { row: 5, col: 0 },
-    D: { row: 5, col: 5 },
-  });
+  const [piecePos, setPiecePos] = useState<Coord>(START_POS);
   const [movesUsed, setMovesUsed] = useState<number>(0);
-  const [showHints, setShowHints] = useState<boolean>(true);
-  const [answeredOption, setAnsweredOption] = useState<OptionKey | null>(null);
+  const [capturedOptions, setCapturedOptions] = useState<OptionKey[]>([]);
+  const [wrongCaptured, setWrongCaptured] = useState<OptionKey | null>(null);
+  const [boardLocked, setBoardLocked] = useState<boolean>(false);
 
   useEffect(() => {
-    const generated = generateTacticalBoard(
-      basePiece,
-      question?.obstacles ?? 3,
-    );
-    setPlayerPos(generated.startPos);
-    setObstacles(generated.obstacles);
-    setTargets(generated.targets);
+    setPiecePos(START_POS);
     setMovesUsed(0);
-    setShowHints(true);
-    setAnsweredOption(null);
-  }, [question, basePiece]);
+    setCapturedOptions([]);
+    setWrongCaptured(null);
+    setBoardLocked(false);
+  }, [question.id]);
 
-  const activeTargetPositions = useMemo(() => {
-    return (Object.keys(targets) as OptionKey[])
-      .filter((key) => !eliminatedOptions.includes(key))
-      .map((key) => targets[key]);
-  }, [targets, eliminatedOptions]);
+  const isInteractionDisabled = disabled || boardLocked;
 
-  const legalMoves = useMemo(() => {
-    if (answeredOption || disabled) return [];
-    return getSingleStepMoves(
-      playerPos,
-      resolvedPiece,
-      obstacles,
-      activeTargetPositions,
-    );
+  const activeTokenCoords = useMemo(() => {
+    const coords = new Set<string>();
+    (["A", "B", "C", "D"] as OptionKey[]).forEach((opt) => {
+      if (eliminatedOptions.includes(opt) || capturedOptions.includes(opt))
+        return;
+      const tPos = tokens[opt];
+      if (tPos) coords.add(coordKey(tPos.r, tPos.c));
+    });
+    return coords;
+  }, [tokens, eliminatedOptions, capturedOptions]);
+
+  const validMoves = useMemo(() => {
+    if (isInteractionDisabled) return new Set<string>();
+    return getValidMoves(piecePos, activePiece, obstacles, activeTokenCoords);
   }, [
-    playerPos,
-    resolvedPiece,
+    piecePos,
+    activePiece,
     obstacles,
-    activeTargetPositions,
-    answeredOption,
-    disabled,
+    activeTokenCoords,
+    isInteractionDisabled,
   ]);
 
-  const handleSquareClick = (row: number, col: number) => {
-    if (answeredOption || disabled) return;
+  const handleCellClick = (r: number, c: number) => {
+    if (isInteractionDisabled) return;
 
-    if (playerPos.row === row && playerPos.col === col) {
-      setShowHints((prev) => !prev);
+    const targetKey = coordKey(r, c);
+    if (!validMoves.has(targetKey)) return;
+
+    const nextMoves = movesUsed + 1;
+    setPiecePos({ r, c });
+    setMovesUsed(nextMoves);
+
+    const hitOption = (["A", "B", "C", "D"] as OptionKey[]).find((opt) => {
+      if (eliminatedOptions.includes(opt)) return false;
+      if (capturedOptions.includes(opt)) return false;
+      const tPos = tokens[opt];
+      return tPos && tPos.r === r && tPos.c === c;
+    });
+
+    if (!hitOption) {
+      sound.playMove();
       return;
     }
 
-    const isLegal = legalMoves.some((m) => m.row === row && m.col === col);
-    if (!isLegal) return;
-
-    const hitOption = (Object.keys(targets) as OptionKey[]).find(
-      (key) =>
-        !eliminatedOptions.includes(key) &&
-        targets[key]?.row === row &&
-        targets[key]?.col === col,
-    );
-
-    const nextMoves = movesUsed + 1;
-    setMovesUsed(nextMoves);
-    setPlayerPos({ row, col });
-
-    if (hitOption) {
-      setAnsweredOption(hitOption);
-      const isCorrect = validCorrectOptions.includes(hitOption);
-      if (isCorrect) sound.playCorrect();
-      else sound.playWrong();
+    if (!isMultiple) {
+      const isCorrect = validCorrectKeys.includes(hitOption);
+      if (isCorrect) {
+        sound.playCorrect();
+        setCapturedOptions([hitOption]);
+      } else {
+        sound.playWrong();
+        setWrongCaptured(hitOption);
+      }
+      setBoardLocked(true);
       onAnswer(hitOption, isCorrect, nextMoves);
+      return;
+    }
+
+    // Mode Multiple Answers: biarkan lanjut meski pilihan pertama salah
+    const nextCaptured = capturedOptions.includes(hitOption)
+      ? capturedOptions
+      : [...capturedOptions, hitOption];
+    setCapturedOptions(nextCaptured);
+
+    if (nextCaptured.length >= validCorrectKeys.length) {
+      const allCollected =
+        nextCaptured.length === validCorrectKeys.length &&
+        validCorrectKeys.every((key) => nextCaptured.includes(key));
+
+      if (allCollected) {
+        sound.playCorrect();
+        setBoardLocked(true);
+        onAnswer(nextCaptured[0], true, nextMoves);
+      } else {
+        sound.playWrong();
+        const firstWrong =
+          nextCaptured.find((key) => !validCorrectKeys.includes(key)) ||
+          nextCaptured[0];
+        setWrongCaptured(firstWrong);
+        setBoardLocked(true);
+        onAnswer(firstWrong, false, nextMoves);
+      }
     } else {
-      sound.playMove();
+      sound.playPowerUp();
     }
   };
 
+  const handleManualSubmitMultiple = () => {
+    if (isInteractionDisabled || !isMultiple || capturedOptions.length === 0)
+      return;
+
+    const allCollected =
+      capturedOptions.length === validCorrectKeys.length &&
+      validCorrectKeys.every((key) => capturedOptions.includes(key));
+
+    if (allCollected) {
+      sound.playCorrect();
+      setBoardLocked(true);
+      onAnswer(capturedOptions[0], true, Math.max(1, movesUsed));
+    } else {
+      sound.playWrong();
+      const firstWrong =
+        capturedOptions.find((key) => !validCorrectKeys.includes(key)) ||
+        capturedOptions[0];
+      setWrongCaptured(firstWrong);
+      setBoardLocked(true);
+      onAnswer(firstWrong, false, Math.max(1, movesUsed));
+    }
+  };
+
+  const pieceMeta = PIECE_META[activePiece] || PIECE_META.KNIGHT;
+  const localizedPiece = PIECE_META_I18N?.[lang]?.[activePiece] as
+    | { name?: string; hint?: string }
+    | undefined;
+  const pieceName = localizedPiece?.name || pieceMeta.name;
+  const pieceDesc =
+    activePiece === "PAWN"
+      ? lang === "EN"
+        ? pieceMeta.moveDescEn
+        : pieceMeta.moveDesc
+      : localizedPiece?.hint ||
+        (lang === "EN" ? pieceMeta.moveDescEn : pieceMeta.moveDesc);
+
   return (
-    <div className="flex flex-col w-full select-none">
-      {/* Header Karakter Bidak */}
-      <div className="flex items-center justify-between gap-2 bg-[#EEF6FF] border-2 border-[#D4E7FF] p-3 rounded-2xl mb-3">
-        <div className="flex items-center gap-3">
+    <div className="flex flex-col gap-3">
+      {/* Header Info Bidak Aktif */}
+      <div className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-2xl bg-[#F8FBFF] border border-slate-200">
+        <div className="flex items-center gap-2.5 min-w-0">
           <div
-            className={`w-12 h-12 rounded-2xl ${pieceInfo.badgeColor} text-white flex items-center justify-center text-3xl leading-none shadow-md border-b-4 border-black/20 shrink-0`}
+            className={`w-10 h-10 rounded-xl ${pieceMeta.badgeColor} text-white flex items-center justify-center text-2xl shrink-0 shadow-xs`}
           >
-            {pieceInfo.symbol}
+            {pieceMeta.symbol}
           </div>
-          <div>
-            <div className="flex items-center gap-1.5">
-              <h3 className="font-extrabold text-slate-800 text-sm sm:text-base">
-                {localizedPiece.name}
-              </h3>
-              {resolvedPiece !== basePiece && (
-                <span className="inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full bg-purple-500 text-white">
-                  <Sparkles className="w-2.5 h-2.5" /> SUPER
-                </span>
-              )}
-            </div>
-            <p className="text-xs font-medium text-slate-500 leading-snug">
-              {localizedPiece.hint}
+          <div className="min-w-0">
+            <p className="font-black text-xs sm:text-sm text-slate-800 truncate">
+              {pieceName}
+            </p>
+            <p className="text-[11px] font-semibold text-slate-500 truncate">
+              {pieceDesc}
             </p>
           </div>
         </div>
 
-        <div className="flex flex-col sm:flex-row items-end sm:items-center gap-1.5 shrink-0">
-          <span
-            title={t("stepsLabel")}
-            className="inline-flex items-center gap-1 text-xs font-extrabold px-2.5 py-1.5 rounded-xl bg-white text-sky-600 border border-sky-200 shadow-xs"
-          >
-            <Footprints className="w-3.5 h-3.5" />
-            {movesUsed}
-          </span>
-          <button
-            type="button"
-            onClick={() => setShowHints((prev) => !prev)}
-            className="inline-flex items-center gap-1 text-xs font-bold px-2.5 py-1.5 rounded-xl bg-white hover:bg-sky-50 text-slate-600 border border-slate-200 transition cursor-pointer"
-          >
-            {showHints ? (
-              <Eye className="w-3.5 h-3.5 text-emerald-500" />
-            ) : (
-              <EyeOff className="w-3.5 h-3.5 text-slate-400" />
-            )}
-            <span className="hidden sm:inline">
-              {showHints ? t("hintShow") : t("hintHide")}
-            </span>
-          </button>
-        </div>
+        <span className="px-2.5 py-1 rounded-xl bg-white border border-slate-200 text-[11px] font-black text-slate-600 shrink-0">
+          {lang === "EN" ? `Moves: ${movesUsed}` : `Langkah: ${movesUsed}`}
+        </span>
       </div>
 
-      {/* Papan Catur Ukuran Fixed 6x6 */}
-      <div className="w-full max-w-[440px] mx-auto p-2.5 sm:p-3 rounded-3xl bg-[#DCEBFA] border-2 border-[#C2DDF8] border-b-[6px] shadow-inner">
-        <div className="grid grid-cols-6 grid-rows-6 w-full aspect-square rounded-2xl overflow-hidden border-2 border-[#B3D4F5] bg-white shadow-sm">
-          {Array.from({ length: BOARD_SIZE }).map((_, row) =>
-            Array.from({ length: BOARD_SIZE }).map((__, col) => {
-              const isDark = (row + col) % 2 === 1;
-              const isPlayerHere =
-                playerPos.row === row && playerPos.col === col;
-              const isObstacle = obstacles.some(
-                (o) => o.row === row && o.col === col,
+      {/* Indikator Progres Khusus Multiple Answers */}
+      {isMultiple && (
+        <div className="p-3 rounded-2xl bg-amber-50 border-2 border-amber-300 flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-col gap-1">
+            <span className="text-xs font-black text-amber-900 flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-amber-600" />
+              {lang === "EN"
+                ? `Multiple Answers: Collected ${capturedOptions.length} of ${validCorrectKeys.length}`
+                : `Jawaban Ganda: Terkumpul ${capturedOptions.length} dari ${validCorrectKeys.length}`}
+            </span>
+            <div className="flex items-center gap-1.5">
+              {capturedOptions.length === 0 ? (
+                <span className="text-[11px] font-bold text-amber-700">
+                  {lang === "EN"
+                    ? "Capture all correct option letters on the board!"
+                    : "Gerakkan bidak untuk menangkap semua huruf jawaban benar!"}
+                </span>
+              ) : (
+                capturedOptions.map((opt) => {
+                  if (!boardLocked) {
+                    return (
+                      <span
+                        key={opt}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-indigo-600 text-white text-[11px] font-black"
+                      >
+                        <Check className="w-3 h-3" /> {opt}
+                      </span>
+                    );
+                  }
+                  const isRight = validCorrectKeys.includes(opt);
+                  return (
+                    <span
+                      key={opt}
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-white text-[11px] font-black ${
+                        isRight ? "bg-emerald-500" : "bg-rose-500"
+                      }`}
+                    >
+                      {isRight ? (
+                        <CheckCircle2 className="w-3 h-3" />
+                      ) : (
+                        <XCircle className="w-3 h-3" />
+                      )}{" "}
+                      {opt}
+                    </span>
+                  );
+                })
+              )}
+            </div>
+          </div>
+
+          {capturedOptions.length > 0 && !isInteractionDisabled && (
+            <button
+              type="button"
+              onClick={handleManualSubmitMultiple}
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-black transition cursor-pointer shrink-0"
+            >
+              <Send className="w-3 h-3" />
+              <span>{lang === "EN" ? "Lock Answer" : "Kunci"}</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Papan Catur 6x6 (Soft-Blue Frame & Koordinat Catur) */}
+      <div className="w-full max-w-[410px] mx-auto p-3 sm:p-3.5 rounded-[28px] bg-[#E8F3FE] border-2 border-[#CBE3FC] shadow-sm select-none">
+        <div className="aspect-square w-full grid grid-cols-6 grid-rows-6 rounded-2xl overflow-hidden border border-[#C5DDF8] bg-white">
+          {Array.from({ length: BOARD_SIZE }).map((_, r) =>
+            Array.from({ length: BOARD_SIZE }).map((__, c) => {
+              const key = coordKey(r, c);
+              const isDark = (r + c) % 2 === 1;
+              const isPlayerHere = piecePos.r === r && piecePos.c === c;
+              const isObstacle = obstacles.has(key);
+              const isValidMove = validMoves.has(key);
+
+              const rankLabel = c === 0 ? String(BOARD_SIZE - r) : null;
+              const fileLabel =
+                r === BOARD_SIZE - 1 ? String.fromCharCode(65 + c) : null;
+
+              const tokenHere = (["A", "B", "C", "D"] as OptionKey[]).find(
+                (opt) => {
+                  const tPos = tokens[opt];
+                  return tPos && tPos.r === r && tPos.c === c;
+                },
               );
 
-              const targetKey = (Object.keys(targets) as OptionKey[]).find(
-                (key) =>
-                  !eliminatedOptions.includes(key) &&
-                  targets[key]?.row === row &&
-                  targets[key]?.col === col,
-              );
+              const isEliminated = tokenHere
+                ? eliminatedOptions.includes(tokenHere)
+                : false;
+              const isAlreadyCaptured = tokenHere
+                ? capturedOptions.includes(tokenHere)
+                : false;
+              const isWrongHit = tokenHere
+                ? wrongCaptured === tokenHere
+                : false;
 
-              const isLegalMove =
-                showHints &&
-                legalMoves.some((m) => m.row === row && m.col === col);
+              const showActiveToken =
+                tokenHere && !isEliminated && !isAlreadyCaptured;
 
-              let tileBg = isDark
-                ? "bg-[#D6E9FD] hover:bg-[#C6E0FC]"
-                : "bg-[#FFFFFF] hover:bg-[#F4F9FF]";
-
-              if (answeredOption && isPlayerHere) {
-                tileBg = validCorrectOptions.includes(answeredOption)
-                  ? "bg-emerald-200"
-                  : "bg-rose-200";
+              let cellBg = isDark ? "bg-[#D7E9FD]" : "bg-white";
+              if (isPlayerHere) {
+                cellBg = "bg-white ring-1 ring-inset ring-slate-900 z-10";
               }
 
               return (
                 <button
+                  key={key}
                   type="button"
-                  key={`${row}-${col}`}
-                  onClick={() => handleSquareClick(row, col)}
-                  className={`relative w-full h-full aspect-square overflow-hidden p-0 flex items-center justify-center transition-colors duration-150 ${tileBg} ${
-                    isLegalMove ? "cursor-pointer" : "cursor-default"
+                  disabled={!isValidMove || isInteractionDisabled}
+                  onClick={() => handleCellClick(r, c)}
+                  className={`relative flex items-center justify-center transition-colors ${cellBg} ${
+                    isValidMove && !isInteractionDisabled
+                      ? "cursor-pointer hover:brightness-95"
+                      : "cursor-default"
                   }`}
                 >
-                  {/* Koordinat Sudut Lembut */}
-                  {col === 0 && (
-                    <span className="absolute top-1 left-1.5 text-[10px] font-extrabold leading-none text-sky-900/30 pointer-events-none">
-                      {BOARD_SIZE - row}
-                    </span>
-                  )}
-                  {row === BOARD_SIZE - 1 && (
-                    <span className="absolute bottom-1 right-1.5 text-[10px] font-extrabold leading-none text-sky-900/30 pointer-events-none">
-                      {COL_LABELS[col]}
+                  {/* Koordinat Baris (6..1) */}
+                  {rankLabel && (
+                    <span className="absolute top-1 left-1.5 text-[10px] font-extrabold text-[#7AA3CC] leading-none pointer-events-none">
+                      {rankLabel}
                     </span>
                   )}
 
-                  {/* Balok Rintangan Kayu/Pagar */}
+                  {/* Koordinat Kolom (A..F) */}
+                  {fileLabel && (
+                    <span className="absolute bottom-1 right-1.5 text-[10px] font-extrabold text-[#7AA3CC] leading-none pointer-events-none">
+                      {fileLabel}
+                    </span>
+                  )}
+
+                  {/* Titik Hijau Langkah Valid */}
+                  {isValidMove && !showActiveToken && !isPlayerHere && (
+                    <span className="w-3.5 h-3.5 rounded-full bg-[#10B981] shadow-[0_2px_5px_rgba(16,185,129,0.4)] pointer-events-none" />
+                  )}
+
+                  {/* Ubin Rintangan Bata 3D Kuning Emas */}
                   {isObstacle && (
-                    <div className="w-[74%] h-[74%] rounded-2xl bg-gradient-to-b from-amber-200 to-amber-300 border-2 border-amber-400 border-b-4 shadow-xs flex items-center justify-center pointer-events-none">
-                      <span className="text-base sm:text-xl leading-none select-none">
+                    <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-2xl bg-gradient-to-b from-[#FDE047] to-[#FACC15] border-b-[4px] border-[#EAB308] shadow-xs flex items-center justify-center pointer-events-none">
+                      <span className="text-lg sm:text-xl leading-none">
                         🧱
                       </span>
                     </div>
                   )}
 
-                  {/* Titik Hijau Bouncy Petunjuk Langkah */}
-                  {isLegalMove && !targetKey && !isObstacle && (
-                    <motion.span
-                      animate={{ scale: [0.85, 1.15, 0.85] }}
-                      transition={{ repeat: Infinity, duration: 1.4 }}
-                      className="w-4 h-4 sm:w-5 sm:h-5 rounded-full bg-emerald-400 border-2 border-white shadow-md pointer-events-none"
-                    />
+                  {/* Badge Opsi Sudah Tertangkap */}
+                  {tokenHere && isAlreadyCaptured && !isPlayerHere && (
+                    <span
+                      className={`w-7 h-7 rounded-lg border font-black text-xs flex items-center justify-center pointer-events-none ${
+                        !boardLocked
+                          ? "bg-indigo-500/20 border-indigo-500 text-indigo-800"
+                          : validCorrectKeys.includes(tokenHere)
+                            ? "bg-emerald-500/25 border-emerald-500 text-emerald-800"
+                            : "bg-rose-500/25 border-rose-500 text-rose-800"
+                      }`}
+                    >
+                      {!boardLocked
+                        ? `●${tokenHere}`
+                        : validCorrectKeys.includes(tokenHere)
+                          ? `✓${tokenHere}`
+                          : `✗${tokenHere}`}
+                    </span>
                   )}
 
-                  {/* Ring Sorotan jika Target Bisa Dimakan */}
-                  {isLegalMove && targetKey && (
-                    <span className="absolute inset-1 rounded-2xl border-[3px] border-dashed border-amber-400 animate-spin [animation-duration:7s] pointer-events-none" />
+                  {/* Token Pilihan Jawaban Aktif dengan Efek Lompat (animate-bounce) */}
+                  {showActiveToken && tokenHere && (
+                    <span
+                      className={`w-9 h-9 sm:w-11 sm:h-11 rounded-2xl ${
+                        isWrongHit
+                          ? "bg-rose-600"
+                          : OPTION_STYLES[tokenHere].badgeBg
+                      } text-white font-black text-sm sm:text-base flex items-center justify-center shadow-sm border-b-[4px] border-black/25 pointer-events-none ${
+                        isValidMove ? "animate-bounce" : ""
+                      }`}
+                    >
+                      {tokenHere}
+                    </span>
                   )}
 
-                  {/* Token Jawaban A, B, C, D Gaya Tombol 3D */}
-                  <AnimatePresence>
-                    {targetKey && !isPlayerHere && (
-                      <motion.div
-                        initial={{ scale: 0, rotate: -15 }}
-                        animate={{ scale: 1, rotate: 0 }}
-                        exit={{ scale: 0, opacity: 0 }}
-                        transition={{
-                          type: "spring",
-                          stiffness: 380,
-                          damping: 20,
-                        }}
-                        className={`flex items-center justify-center w-[76%] h-[76%] rounded-2xl bg-gradient-to-b ${OPTION_STYLES[targetKey].tokenBg} text-white font-black text-base sm:text-xl leading-none shadow-md border-2 border-white/60 border-b-4 ${OPTION_STYLES[targetKey].tokenBorder} pointer-events-none`}
-                      >
-                        {targetKey}
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-
-                  {/* Bidak Pemain */}
+                  {/* Bidak Aktif 3D Kuning Emas */}
                   {isPlayerHere && (
                     <motion.div
-                      layout="position"
-                      layoutId="active-chess-piece"
+                      layoutId={`chess-piece-${question.id}`}
                       transition={{
                         type: "spring",
                         stiffness: 420,
-                        damping: 26,
+                        damping: 28,
                       }}
-                      className="z-10 flex items-center justify-center w-[78%] h-[78%] rounded-2xl bg-gradient-to-b from-[#FFE066] to-[#FFB800] text-slate-900 text-2xl sm:text-4xl leading-none shadow-lg border-2 border-white border-b-4 border-b-[#CC8E00] pointer-events-none"
+                      className="w-9 h-9 sm:w-11 sm:h-11 rounded-2xl bg-gradient-to-b from-[#FDE047] to-[#FACC15] border-b-[4px] border-[#CA8A04] text-slate-900 flex items-center justify-center text-2xl sm:text-[28px] shadow-sm z-20 pointer-events-none"
                     >
-                      {pieceInfo.symbol}
+                      {pieceMeta.symbol}
                     </motion.div>
                   )}
                 </button>

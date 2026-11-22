@@ -21,6 +21,7 @@ import {
   ShieldAlert,
   Zap,
   ArrowRight,
+  Pencil,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import {
@@ -345,14 +346,31 @@ export default function DashboardPage() {
                         <BookOpen className="w-3.5 h-3.5" />
                         {quiz.question_count} {t("questionsCount")}
                       </span>
-                      <button
-                        type="button"
-                        onClick={(e) => handleDelete(e, quiz.id, quiz.title)}
-                        className="w-8 h-8 rounded-full bg-rose-50 hover:bg-rose-500 text-rose-500 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
-                        title={t("delete")}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+
+                      {/* Bungkus tombol Edit & Hapus di sini */}
+                      <div className="flex items-center gap-1.5">
+                        <Link
+                          href={`/edit/${quiz.id}`}
+                          onClick={(e) => e.stopPropagation()}
+                          title={
+                            lang === "EN"
+                              ? "Edit Quiz & Questions"
+                              : "Edit Kuis & Soal"
+                          }
+                          className="w-8 h-8 rounded-full bg-sky-50 hover:bg-[#2B90FF] text-[#2B90FF] hover:text-white flex items-center justify-center transition-colors"
+                        >
+                          <Pencil className="w-4 h-4" />
+                        </Link>
+
+                        <button
+                          type="button"
+                          onClick={(e) => handleDelete(e, quiz.id, quiz.title)}
+                          className="w-8 h-8 rounded-full bg-rose-50 hover:bg-rose-500 text-rose-500 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+                          title={t("delete")}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
 
                     <h3 className="font-black text-xl text-slate-800 leading-snug mb-1">
