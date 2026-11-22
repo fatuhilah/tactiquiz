@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { getTeacherSession, TeacherSession } from "@/lib/auth";
+import { useLanguage } from "@/components/LanguageProvider";
 
 interface ReportRoom {
   id: string;
@@ -34,6 +35,8 @@ interface RoomQueryRow {
 
 export default function ReportsIndexPage() {
   const router = useRouter();
+  const { lang } = useLanguage();
+
   const [teacher, setTeacher] = useState<TeacherSession | null>(null);
   const [rooms, setRooms] = useState<ReportRoom[]>([]);
   const [loading, setLoading] = useState(true);
@@ -77,7 +80,7 @@ export default function ReportsIndexPage() {
             pin_code: r.pin_code,
             created_at: r.created_at,
             quiz_id: r.quiz_id,
-            quiz_title: quizMap.get(r.quiz_id) || "Kuis",
+            quiz_title: quizMap.get(r.quiz_id) || "Quiz",
             participant_count: r.players ? r.players.length : 0,
           }),
         );
@@ -93,9 +96,15 @@ export default function ReportsIndexPage() {
     e.preventDefault();
     e.stopPropagation();
 
-    const confirmed = await window.modernConfirm(
-      `Hapus laporan "${room.quiz_title}" (PIN: ${room.pin_code})?\nSemua data nilai siswa pada sesi ini juga akan terhapus permanen.`,
-    );
+    const confirmMessage =
+      lang === "EN"
+        ? `Delete report "${room.quiz_title}" (PIN: ${room.pin_code})?\nAll student score data in this session will also be permanently deleted.`
+        : `Hapus laporan "${room.quiz_title}" (PIN: ${room.pin_code})?\nSemua data nilai siswa pada sesi ini juga akan terhapus permanen.`;
+
+    const confirmed =
+      typeof window.modernConfirm === "function"
+        ? await window.modernConfirm(confirmMessage)
+        : window.confirm(confirmMessage);
     if (!confirmed) return;
 
     setDeletingId(room.id);
@@ -121,8 +130,14 @@ export default function ReportsIndexPage() {
       const msg =
         err instanceof Error
           ? err.message
-          : "Terjadi kesalahan saat menghapus laporan";
-      alert(`Gagal menghapus laporan: ${msg}`);
+          : lang === "EN"
+            ? "An error occurred while deleting the report"
+            : "Terjadi kesalahan saat menghapus laporan";
+      alert(
+        lang === "EN"
+          ? `Failed to delete report: ${msg}`
+          : `Gagal menghapus laporan: ${msg}`,
+      );
     } finally {
       setDeletingId(null);
     }
@@ -143,10 +158,14 @@ export default function ReportsIndexPage() {
             </Link>
             <div>
               <h1 className="font-black text-lg sm:text-xl text-slate-800 leading-none">
-                Laporan Kuis Selesai
+                {lang === "EN"
+                  ? "Completed Quiz Reports"
+                  : "Laporan Kuis Selesai"}
               </h1>
               <span className="text-xs font-bold text-slate-400">
-                Pilih sesi kelas untuk melihat nilai dan unduh PDF
+                {lang === "EN"
+                  ? "Select a class session to view scores and export reports"
+                  : "Pilih sesi kelas untuk melihat nilai dan unduh laporan"}
               </span>
             </div>
           </div>
@@ -160,34 +179,39 @@ export default function ReportsIndexPage() {
           </div>
           <div>
             <h2 className="text-2xl font-black text-slate-800">
-              Riwayat Kelas
+              {lang === "EN" ? "Class History" : "Riwayat Kelas"}
             </h2>
             <p className="text-sm font-bold text-slate-500">
-              Daftar sesi kuis yang telah Anda selesaikan
+              {lang === "EN"
+                ? "List of quiz sessions you have completed"
+                : "Daftar sesi kuis yang telah Anda selesaikan"}
             </p>
           </div>
         </div>
 
         {loading ? (
           <div className="text-center py-20 font-bold text-slate-400">
-            Memuat laporan...
+            {lang === "EN" ? "Loading reports..." : "Memuat laporan..."}
           </div>
         ) : rooms.length === 0 ? (
           <div className="bg-white p-10 rounded-[28px] border-2 border-slate-200 text-center shadow-sm">
             <BookOpen className="w-12 h-12 text-slate-300 mx-auto mb-3" />
             <h3 className="text-xl font-black text-slate-700">
-              Belum ada kelas yang selesai
+              {lang === "EN"
+                ? "No completed classes yet"
+                : "Belum ada kelas yang selesai"}
             </h3>
             <p className="text-sm text-slate-500 mt-1">
-              Mainkan kuis secara live bersama siswa untuk menghasilkan laporan
-              di sini.
+              {lang === "EN"
+                ? "Host a live quiz with students to generate reports here."
+                : "Mainkan kuis secara live bersama siswa untuk menghasilkan laporan di sini."}
             </p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {rooms.map((room) => {
               const date = new Date(room.created_at).toLocaleDateString(
-                "id-ID",
+                lang === "EN" ? "en-US" : "id-ID",
                 {
                   weekday: "long",
                   day: "numeric",
@@ -223,7 +247,11 @@ export default function ReportsIndexPage() {
                   <div className="flex items-center justify-between pt-4 border-t border-slate-100">
                     <span className="flex items-center gap-1.5 text-sm font-extrabold text-indigo-600">
                       <Users className="w-4 h-4" /> {room.participant_count}{" "}
-                      Siswa
+                      {lang === "EN"
+                        ? room.participant_count === 1
+                          ? "Student"
+                          : "Students"
+                        : "Siswa"}
                     </span>
 
                     <div className="flex items-center gap-2">
@@ -231,7 +259,11 @@ export default function ReportsIndexPage() {
                         type="button"
                         onClick={(e) => handleDeleteReport(e, room)}
                         disabled={isDeleting}
-                        title="Hapus Laporan Sesi Ini"
+                        title={
+                          lang === "EN"
+                            ? "Delete This Session Report"
+                            : "Hapus Laporan Sesi Ini"
+                        }
                         className="w-8 h-8 rounded-full bg-rose-50 hover:bg-rose-500 text-rose-500 hover:text-white disabled:opacity-50 flex items-center justify-center transition-colors cursor-pointer"
                       >
                         <Trash2 className="w-4 h-4" />
