@@ -67,6 +67,7 @@ const SLIDE_DELTAS: Record<
 };
 
 const ALL_DIRS: SlideDir[] = ["UP", "DOWN", "LEFT", "RIGHT"];
+const OPTION_KEYS: OptionKey[] = ["A", "B", "C", "D"];
 
 function coordKey(r: number, c: number): string {
   return `${r},${c}`;
@@ -174,7 +175,7 @@ function canReachSlideTarget(
   ignoredOpts: Set<OptionKey>,
 ): boolean {
   const activeMap = new Map<string, OptionKey>();
-  (["A", "B", "C", "D"] as OptionKey[]).forEach((opt) => {
+  OPTION_KEYS.forEach((opt) => {
     if (!ignoredOpts.has(opt)) {
       activeMap.set(coordKey(tokens[opt].r, tokens[opt].c), opt);
     }
@@ -208,34 +209,48 @@ function canReachSlideTarget(
   return false;
 }
 
-function isSlideLayoutPlayable(
+// Menguji seluruh kemungkinan subset opsi yang sudah tertangkap (0..3 opsi) agar 100% bebas buntu
+function isSuperSlidePlayable(
   tokens: Record<OptionKey, Coord>,
   obstacles: Set<string>,
 ): boolean {
-  const keys: OptionKey[] = ["A", "B", "C", "D"];
-  const emptyIgnored = new Set<OptionKey>();
+  for (let mask = 0; mask < 15; mask++) {
+    const capturedSet = new Set<OptionKey>();
+    const capturedList: OptionKey[] = [];
+    const remainingList: OptionKey[] = [];
 
-  // 1. Pastikan semua 4 opsi bisa dicapai dari titik awal tanpa terhalang opsi lain
-  const allReachableFromStart = keys.every((opt) =>
-    canReachSlideTarget(START_POS, opt, tokens, obstacles, emptyIgnored),
-  );
-  if (!allReachableFromStart) return false;
+    OPTION_KEYS.forEach((opt, idx) => {
+      if ((mask & (1 << idx)) !== 0) {
+        capturedSet.add(opt);
+        capturedList.push(opt);
+      } else {
+        remainingList.push(opt);
+      }
+    });
 
-  // 2. Pastikan antar opsi juga saling terhubung (untuk Multiple Answers)
-  for (const fromOpt of keys) {
-    const ignoredAfterFirst = new Set<OptionKey>([fromOpt]);
-    for (const toOpt of keys) {
-      if (fromOpt === toOpt) continue;
+    // 1. Setiap opsi tersisa harus bisa dijangkau dari START_POS (termasuk setelah Reset)
+    for (const target of remainingList) {
       if (
-        !canReachSlideTarget(
-          tokens[fromOpt],
-          toOpt,
-          tokens,
-          obstacles,
-          ignoredAfterFirst,
-        )
+        !canReachSlideTarget(START_POS, target, tokens, obstacles, capturedSet)
       ) {
         return false;
+      }
+    }
+
+    // 2. Setiap opsi tersisa harus bisa dijangkau langsung dari posisi opsi mana pun yang baru tertangkap
+    for (const prevOpt of capturedList) {
+      for (const target of remainingList) {
+        if (
+          !canReachSlideTarget(
+            tokens[prevOpt],
+            target,
+            tokens,
+            obstacles,
+            capturedSet,
+          )
+        ) {
+          return false;
+        }
       }
     }
   }
@@ -247,11 +262,10 @@ function generateSlideLayout(obstacleCount: number): {
   tokens: Record<OptionKey, Coord>;
   obstacles: Set<string>;
 } {
-  const optionKeys: OptionKey[] = ["A", "B", "C", "D"];
-  const targetObstacles = Math.max(5, Math.min(7, (obstacleCount || 3) + 2));
+  const targetObstacles = Math.max(4, Math.min(6, (obstacleCount || 3) + 2));
   const startKey = coordKey(START_POS.r, START_POS.c);
 
-  for (let attempt = 0; attempt < 160; attempt++) {
+  for (let attempt = 0; attempt < 240; attempt++) {
     const allCells: Coord[] = [];
     for (let r = 0; r < BOARD_SIZE; r++) {
       for (let c = 0; c < BOARD_SIZE; c++) {
@@ -284,30 +298,30 @@ function generateSlideLayout(obstacleCount: number): {
     const pool = nonTrivialStops.length >= 4 ? nonTrivialStops : reachableStops;
 
     // 3. Coba beberapa kombinasi 4 titik dari pool yang sudah dijamin reachable
-    for (let pickTry = 0; pickTry < 12; pickTry++) {
+    for (let pickTry = 0; pickTry < 18; pickTry++) {
       const picked = [...pool].sort(() => Math.random() - 0.5).slice(0, 4);
       if (picked.length < 4) break;
 
       const tokens = {} as Record<OptionKey, Coord>;
-      optionKeys.forEach((opt, idx) => {
+      OPTION_KEYS.forEach((opt, idx) => {
         tokens[opt] = picked[idx];
       });
 
-      if (isSlideLayoutPlayable(tokens, obstacles)) {
+      if (isSuperSlidePlayable(tokens, obstacles)) {
         return { tokens, obstacles };
       }
     }
   }
 
-  // Fallback terverifikasi 100% playable untuk semua 4 jalur dari start & semua 12 pasangan antar-opsi
+  // Fallback terverifikasi 100% lolos seluruh 44 jalur BFS (Single & Multiple Answers)
   return {
     tokens: {
-      A: { r: 1, c: 5 },
-      B: { r: 4, c: 1 },
-      C: { r: 4, c: 5 },
-      D: { r: 0, c: 2 },
+      A: { r: 0, c: 4 },
+      B: { r: 4, c: 5 },
+      C: { r: 3, c: 5 },
+      D: { r: 1, c: 2 },
     },
-    obstacles: new Set(["1,0", "2,4", "0,3", "5,3", "4,0"]),
+    obstacles: new Set(["0,5", "1,3", "2,0", "2,1", "5,4"]),
   };
 }
 
@@ -342,7 +356,9 @@ export default function TactiSlideBoard({
     id: number;
   } | null>(null);
   const [slidesUsed, setSlidesUsed] = useState<number>(0);
+  const slidesUsedRef = useRef<number>(0);
   const [selectedOptions, setSelectedOptions] = useState<OptionKey[]>([]);
+  const selectedOptionsRef = useRef<OptionKey[]>([]);
   const [boardLocked, setBoardLocked] = useState<boolean>(false);
   const [hasWrongResult, setHasWrongResult] = useState<boolean>(false);
 
@@ -351,7 +367,9 @@ export default function TactiSlideBoard({
     puckPosRef.current = START_POS;
     setLastTrail(null);
     setSlidesUsed(0);
+    slidesUsedRef.current = 0;
     setSelectedOptions([]);
+    selectedOptionsRef.current = [];
     setBoardLocked(false);
     setHasWrongResult(false);
   }, [question.id]);
@@ -361,7 +379,7 @@ export default function TactiSlideBoard({
   // Opsi yang sudah dipilih menjadi tembus agar tidak memblokir luncuran ke opsi berikutnya
   const activeTokenMap = useMemo(() => {
     const map = new Map<string, OptionKey>();
-    (["A", "B", "C", "D"] as OptionKey[]).forEach((opt) => {
+    OPTION_KEYS.forEach((opt) => {
       if (eliminatedOptions.includes(opt) || selectedOptions.includes(opt)) {
         return;
       }
@@ -407,21 +425,35 @@ export default function TactiSlideBoard({
       if (isInteractionDisabled) return;
 
       const currentPos = puckPosRef.current;
-      const outcome = simulateSlide(currentPos, dir, obstacles, activeTokenMap);
+      const currSelected = selectedOptionsRef.current;
+
+      const liveTokenMap = new Map<string, OptionKey>();
+      OPTION_KEYS.forEach((opt) => {
+        if (eliminatedOptions.includes(opt) || currSelected.includes(opt)) {
+          return;
+        }
+        const tPos = tokens[opt];
+        if (tPos) liveTokenMap.set(coordKey(tPos.r, tPos.c), opt);
+      });
+
+      const outcome = simulateSlide(currentPos, dir, obstacles, liveTokenMap);
 
       if (outcome.dest.r === currentPos.r && outcome.dest.c === currentPos.c) {
         return;
       }
 
-      const nextSlides = slidesUsed + 1;
+      const nextSlides = slidesUsedRef.current + 1;
+      slidesUsedRef.current = nextSlides;
+      setSlidesUsed(nextSlides);
+
       setLastTrail({
         from: currentPos,
         to: outcome.dest,
         id: nextSlides,
       });
-      setPuckPos(outcome.dest);
+
       puckPosRef.current = outcome.dest;
-      setSlidesUsed(nextSlides);
+      setPuckPos(outcome.dest);
 
       const hitOpt = outcome.hitOption;
       if (!hitOpt) {
@@ -437,6 +469,7 @@ export default function TactiSlideBoard({
           sound.playWrong();
           setHasWrongResult(true);
         }
+        selectedOptionsRef.current = [hitOpt];
         setSelectedOptions([hitOpt]);
         setBoardLocked(true);
         onAnswer(hitOpt, isCorrect, nextSlides);
@@ -444,9 +477,10 @@ export default function TactiSlideBoard({
       }
 
       // Mode Multiple Answers: biarkan lanjut meski pilihan pertama salah
-      const nextSelected = selectedOptions.includes(hitOpt)
-        ? selectedOptions
-        : [...selectedOptions, hitOpt];
+      const nextSelected = currSelected.includes(hitOpt)
+        ? currSelected
+        : [...currSelected, hitOpt];
+      selectedOptionsRef.current = nextSelected;
       setSelectedOptions(nextSelected);
 
       if (nextSelected.length >= validCorrectKeys.length) {
@@ -457,21 +491,28 @@ export default function TactiSlideBoard({
     },
     [
       isInteractionDisabled,
+      eliminatedOptions,
+      tokens,
       obstacles,
-      activeTokenMap,
-      slidesUsed,
       isMultiple,
       validCorrectKeys,
-      selectedOptions,
       onAnswer,
       finalizeMultipleSelection,
     ],
   );
 
   const handleManualSubmitMultiple = () => {
-    if (isInteractionDisabled || !isMultiple || selectedOptions.length === 0)
+    if (
+      isInteractionDisabled ||
+      !isMultiple ||
+      selectedOptionsRef.current.length === 0
+    ) {
       return;
-    finalizeMultipleSelection(selectedOptions, Math.max(1, slidesUsed));
+    }
+    finalizeMultipleSelection(
+      selectedOptionsRef.current,
+      Math.max(1, slidesUsedRef.current),
+    );
   };
 
   const handleResetPosition = () => {
@@ -480,9 +521,11 @@ export default function TactiSlideBoard({
     if (curr.r === START_POS.r && curr.c === START_POS.c) return;
     sound.playMove();
     setLastTrail(null);
-    setPuckPos(START_POS);
     puckPosRef.current = START_POS;
-    setSlidesUsed((prev) => prev + 1);
+    setPuckPos(START_POS);
+    const nextSlides = slidesUsedRef.current + 1;
+    slidesUsedRef.current = nextSlides;
+    setSlidesUsed(nextSlides);
   };
 
   useEffect(() => {
@@ -537,22 +580,22 @@ export default function TactiSlideBoard({
   return (
     <div className="flex flex-col gap-3">
       {/* Glacial Cyber-Ice HUD Header */}
-      <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 rounded-2xl bg-gradient-to-r from-slate-900 via-[#0C243C] to-slate-900 border border-cyan-500/35 text-white shadow-sm">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="relative w-10 h-10 rounded-xl bg-cyan-500/20 border border-cyan-400/45 flex items-center justify-center text-xl shrink-0">
+      <div className="flex items-start sm:items-center justify-between gap-2.5 px-3.5 py-2.5 rounded-2xl bg-gradient-to-r from-slate-900 via-[#0C243C] to-slate-900 border border-cyan-500/35 text-white shadow-sm">
+        <div className="flex items-start sm:items-center gap-2.5 min-w-0 flex-1">
+          <div className="relative w-10 h-10 rounded-xl bg-cyan-500/20 border border-cyan-400/45 flex items-center justify-center text-xl shrink-0 mt-0.5 sm:mt-0">
             <span>🥌</span>
             <Snowflake className="w-3 h-3 text-cyan-300 absolute -top-1 -right-1 animate-spin" />
           </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <p className="font-black text-xs sm:text-sm text-white tracking-tight truncate">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <p className="font-black text-xs sm:text-sm text-white tracking-tight">
                 TactiSlide
               </p>
               <span className="px-1.5 py-0.5 rounded-md bg-cyan-500/20 text-cyan-200 text-[9px] font-black uppercase tracking-wider">
                 Ice Rink
               </span>
             </div>
-            <p className="text-[11px] font-medium text-cyan-100/80 truncate">
+            <p className="text-[11px] font-medium text-cyan-100/85 leading-snug mt-0.5">
               {lang === "EN"
                 ? "Glide across ice & bank off rocks onto the target"
                 : "Meluncur di arena es & pantulkan ke batu menuju target"}
@@ -688,12 +731,10 @@ export default function TactiSlideBoard({
               const isObstacle = obstacles.has(key);
               const landingOutcome = landingByCell.get(key);
 
-              const tokenHere = (["A", "B", "C", "D"] as OptionKey[]).find(
-                (opt) => {
-                  const tPos = tokens[opt];
-                  return tPos && tPos.r === r && tPos.c === c;
-                },
-              );
+              const tokenHere = OPTION_KEYS.find((opt) => {
+                const tPos = tokens[opt];
+                return tPos && tPos.r === r && tPos.c === c;
+              });
 
               const isEliminated = tokenHere
                 ? eliminatedOptions.includes(tokenHere)
