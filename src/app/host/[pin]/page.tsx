@@ -158,18 +158,22 @@ function extractSelectedModes(
       const valid = rawObj.game_modes
         .map((m) => String(m).trim().toUpperCase())
         .filter((m): m is ConcreteGameMode => CONCRETE_MODE_SET.has(m));
-      return Array.from(new Set(valid));
+      const unique = Array.from(new Set(valid));
+      if (unique.length > 0) return unique;
     }
   }
 
   const singleUpper = String(parsedBase.game_mode || "")
     .trim()
     .toUpperCase();
+  if (singleUpper === "MIX") {
+    return [...CONCRETE_GAME_MODES];
+  }
   if (CONCRETE_MODE_SET.has(singleUpper)) {
     return [singleUpper as ConcreteGameMode];
   }
 
-  return [];
+  return ["CHESS"];
 }
 
 function resolveHostQuestionGameMode(
@@ -470,14 +474,20 @@ function MultiGameModeSelector({
   onChange: (nextModes: ConcreteGameMode[]) => void;
   lang: string;
 }) {
-  const isRandomAll = selectedModes.length === 0;
+  const isAllSelected = selectedModes.length === CONCRETE_GAME_MODES.length;
 
   const handleToggleMode = (mode: ConcreteGameMode) => {
     if (selectedModes.includes(mode)) {
+      // Minimal 1 mode harus tetap aktif agar tidak pernah kosong
+      if (selectedModes.length <= 1) return;
       onChange(selectedModes.filter((m) => m !== mode));
     } else {
       onChange([...selectedModes, mode]);
     }
+  };
+
+  const handleSelectAllRandom = () => {
+    onChange([...CONCRETE_GAME_MODES]);
   };
 
   return (
@@ -493,31 +503,31 @@ function MultiGameModeSelector({
             </span>
           </h3>
           <p className="text-xs font-semibold text-slate-500 mt-0.5">
-            {isRandomAll
+            {isAllSelected
               ? lang === "EN"
-                ? "No specific mode selected — questions will randomly cycle through all 10 modes."
-                : "Tidak ada mode dipilih — setiap soal otomatis diacak dari seluruh 10 mode."
+                ? "All 10 modes selected — questions will randomize across every arena mode."
+                : "Semua 10 mode terpilih — setiap soal otomatis diacak dari seluruh mode."
               : selectedModes.length === 1
                 ? lang === "EN"
-                  ? `1 mode active (${GAME_MODES_META[selectedModes[0]]?.name}). Click others to combine!`
-                  : `1 mode aktif (${GAME_MODES_META[selectedModes[0]]?.name}). Klik mode lain untuk menggabungkan!`
+                  ? `1 mode active (${GAME_MODES_META[selectedModes[0]]?.name}). Click others to combine or click Random All!`
+                  : `1 mode aktif (${GAME_MODES_META[selectedModes[0]]?.name}). Klik mode lain untuk menggabungkan atau klik Acak Semua!`
                 : lang === "EN"
-                  ? `${selectedModes.length} modes selected — questions will randomize among your chosen modes.`
-                  : `${selectedModes.length} mode dipilih — soal akan diacak hanya dari mode yang dipilih.`}
+                  ? `${selectedModes.length} of 10 modes selected — questions will randomize among your chosen modes.`
+                  : `${selectedModes.length} dari 10 mode dipilih — soal akan diacak dari mode yang dicentang.`}
           </p>
         </div>
 
         <button
           type="button"
-          onClick={() => onChange([])}
+          onClick={handleSelectAllRandom}
           className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-black border-2 transition cursor-pointer shrink-0 ${
-            isRandomAll
+            isAllSelected
               ? "bg-indigo-600 border-indigo-700 text-white shadow-xs"
               : "bg-slate-50 hover:bg-indigo-50 border-slate-200 text-slate-700"
           }`}
         >
           <Shuffle className="w-3.5 h-3.5" />
-          <span>{lang === "EN" ? "Random All (Default)" : "Acak Semua"}</span>
+          <span>{lang === "EN" ? "Random All (10)" : "Acak Semua (10)"}</span>
         </button>
       </div>
 
@@ -612,7 +622,7 @@ export default function HostRoomPage() {
   const [sessionSettings, setSessionSettings] =
     useState<ExtendedRoomSessionSettings>({
       ...DEFAULT_SESSION_SETTINGS,
-      game_modes: [],
+      game_modes: ["CHESS"],
     });
   const [quizTitle, setQuizTitle] = useState("");
   const [questions, setQuestions] = useState<QuestionRow[]>([]);
@@ -638,19 +648,24 @@ export default function HostRoomPage() {
   const [hostMaxTime, setHostMaxTime] = useState<number>(60);
   const revealedRoundRef = useRef<number | null>(null);
   const prevRevealStateRef = useRef<boolean>(false);
+  const settingsSyncLockRef = useRef<number>(0);
 
   // Kontrol Audio & Sound Effects
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const lastTickSecondRef = useRef<number | null>(null);
 
-  const applyParsedSettings = useCallback((rawSettings: unknown) => {
-    const base = parseSessionSettings(rawSettings);
-    const modes = extractSelectedModes(rawSettings, base);
-    setSessionSettings({
-      ...base,
-      game_modes: modes,
-    });
-  }, []);
+  const applyParsedSettings = useCallback(
+    (rawSettings: unknown, force = false) => {
+      if (!force && Date.now() < settingsSyncLockRef.current) return;
+      const base = parseSessionSettings(rawSettings);
+      const modes = extractSelectedModes(rawSettings, base);
+      setSessionSettings({
+        ...base,
+        game_modes: modes,
+      });
+    },
+    [],
+  );
 
   const fetchPlayers = useCallback(async (roomId: string) => {
     const { data } = await supabase
@@ -743,7 +758,7 @@ export default function HostRoomPage() {
 
       setTeacher(session);
       setRoom(typedRoom);
-      applyParsedSettings(typedRoom.settings);
+      applyParsedSettings(typedRoom.settings, true);
       setQuizTitle(quiz.title);
       setQuestions(typedQuestions);
 
@@ -813,15 +828,21 @@ export default function HostRoomPage() {
 
   const handleChangeSelectedModes = async (nextModes: ConcreteGameMode[]) => {
     if (!room) return;
+    const sanitizedModes: ConcreteGameMode[] =
+      nextModes.length > 0 ? Array.from(new Set(nextModes)) : ["CHESS"];
+
     sound.playMove();
+    settingsSyncLockRef.current = Date.now() + 2500;
 
     const primaryGameMode: TactiGameMode =
-      nextModes.length === 1 ? nextModes[0] : ("MIX" as TactiGameMode);
+      sanitizedModes.length === 1
+        ? sanitizedModes[0]
+        : ("MIX" as TactiGameMode);
 
     const nextSettings: ExtendedRoomSessionSettings = {
       ...sessionSettings,
       game_mode: primaryGameMode,
-      game_modes: nextModes,
+      game_modes: sanitizedModes,
     };
 
     setSessionSettings(nextSettings);
@@ -1130,29 +1151,30 @@ export default function HostRoomPage() {
   const allStudentsFinished =
     players.length > 0 && finishedCount === players.length;
 
-  const activeModesList = sessionSettings.game_modes || [];
-  const headerModeSummary =
-    activeModesList.length === 0
+  const activeModesList = sessionSettings.game_modes || ["CHESS"];
+  const isAllModesSelected =
+    activeModesList.length === CONCRETE_GAME_MODES.length;
+  const headerModeSummary = isAllModesSelected
+    ? {
+        emoji: "🎲",
+        label: lang === "EN" ? "Random All (10 Modes)" : "Acak Semua (10 Mode)",
+      }
+    : activeModesList.length === 1
       ? {
-          emoji: "🎲",
-          label: lang === "EN" ? "Random All (10 Modes)" : "Mode Acak (Semua)",
+          emoji: GAME_MODES_META[activeModesList[0]]?.emoji || "♞",
+          label:
+            GAME_MODES_META[activeModesList[0]]?.name || activeModesList[0],
         }
-      : activeModesList.length === 1
-        ? {
-            emoji: GAME_MODES_META[activeModesList[0]]?.emoji || "♞",
-            label:
-              GAME_MODES_META[activeModesList[0]]?.name || activeModesList[0],
-          }
-        : {
-            emoji: activeModesList
-              .slice(0, 3)
-              .map((m) => GAME_MODES_META[m]?.emoji || "🎮")
-              .join(""),
-            label:
-              lang === "EN"
-                ? `${activeModesList.length} Modes Mix`
-                : `Acak ${activeModesList.length} Mode`,
-          };
+      : {
+          emoji: activeModesList
+            .slice(0, 3)
+            .map((m) => GAME_MODES_META[m]?.emoji || "🎮")
+            .join(""),
+          label:
+            lang === "EN"
+              ? `${activeModesList.length} Modes Mix`
+              : `Acak ${activeModesList.length} Mode`,
+        };
 
   // ==================== LAYAR SOAL SHARE SCREEN (TEACHER-LED) ====================
   const renderTeacherLedStage = () => {
@@ -2463,7 +2485,7 @@ export default function HostRoomPage() {
             </div>
 
             <div className="lg:col-span-7 flex flex-col gap-6">
-              {/* Pemilih Multiple Mode (0 dipilih = Acak Semua) */}
+              {/* Pemilih Multiple Mode (Random All auto-centang semua 10 mode) */}
               <div className="bg-white p-6 rounded-[32px] border-2 border-slate-200/90 border-b-[6px]">
                 <MultiGameModeSelector
                   selectedModes={activeModesList}
